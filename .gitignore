@@ -1,0 +1,21 @@
+# Dependencies and generated output
+node_modules/
+dist/
+.vercel/
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# Local briefs, screenshots, and editor/Office temporary files
+PROJECT BRIEF.docx
+*-screenshot*.png
+~$*
+~WRL*.tmp
+*.tmp
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db

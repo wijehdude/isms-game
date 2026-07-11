@@ -1,0 +1,223 @@
+import { calendarFromMinutes } from "../core/time";
+import { configuredStats, getModel, getUpgrade } from "./catalog";
+import { createStaff, nextId } from "./createGame";
+import { canAfford, postLedger, spend } from "../sim/economy";
+import { recalculateRating } from "../sim/rating";
+import { getPackedTile, isTileBlocked, tileHeight, tileOwnership } from "../world/map";
+import type { ActionResult, Device, GameMessage, GameState, Incident, StaffRole } from "./types";
+
+export function pushMessage(state: GameState, title: string, text: string, tone: GameMessage["tone"] = "info"): void {
+  state.messages.unshift({ id: nextId(state, "message"), minute: state.totalMinutes, title, text, tone });
+  state.messages = state.messages.slice(0, 80);
+}
+
+export function procureDevice(state: GameState, modelId: string, upgradeIds: string[]): ActionResult {
+  const model = getModel(modelId);
+  const uniqueUpgrades = [...new Set(upgradeIds)];
+  const invalid = uniqueUpgrades.find((id) => !getUpgrade(id).kinds.includes(model.kind));
+  if (invalid) return { ok: false, reason: `${getUpgrade(invalid).name} is not compatible with ${model.shortName}.` };
+  const stats = configuredStats(modelId, uniqueUpgrades);
+  if (!canAfford(state, stats.purchaseCost)) return { ok: false, reason: `Requires ${formatMoney(stats.purchaseCost)}; only ${formatMoney(state.economy.cash)} is available.` };
+  spend(state, "procurement", `Purchase order · ${model.name}`, stats.purchaseCost);
+  state.orders.push({
+    id: nextId(state, "order"), modelId, upgradeIds: uniqueUpgrades, stage: "procurement", orderedAt: state.totalMinutes,
+    readyAt: state.totalMinutes + model.leadHours * 60, quotedCost: stats.totalProgrammeCost,
+  });
+  state.tutorial.procured = true;
+  pushMessage(state, "Purchase order placed", `${model.name} is due in ${model.leadHours} hours. ${formatMoney(stats.totalProgrammeCost)} total programme cost.`, "good");
+  return { ok: true, message: `${model.shortName} ordered.` };
+}
+
+export function startIntegration(state: GameState, orderId: string): ActionResult {
+  const order = state.orders.find((candidate) => candidate.id === orderId);
+  if (!order) return { ok: false, reason: "That procurement record no longer exists." };
+  if (order.stage !== "integration-review") return { ok: false, reason: "Delivery and inspection must finish before the ICD review." };
+  if (!state.staff.some((member) => member.role === "engineer")) return { ok: false, reason: "Hire an engineer to own the interface control document." };
+  const model = getModel(order.modelId);
+  const stats = configuredStats(order.modelId, order.upgradeIds);
+  if (!spend(state, "integration", `ICD and C2 integration · ${model.name}`, model.integrationCost)) return { ok: false, reason: `The ICD review needs ${formatMoney(model.integrationCost)}.` };
+  order.stage = "integrating";
+  order.readyAt = state.totalMinutes + stats.integrationHours * 60;
+  state.tutorial.integrated = true;
+  pushMessage(state, "ICD review approved", `${model.shortName} identity, time, location, alarm and health mappings are being integrated.`, "good");
+  return { ok: true, message: "Integration work started." };
+}
+
+export function startFactoryTest(state: GameState, orderId: string): ActionResult {
+  const order = state.orders.find((candidate) => candidate.id === orderId);
+  if (!order) return { ok: false, reason: "That capability record no longer exists." };
+  if (order.stage !== "factory-test") return { ok: false, reason: "Complete the ICD integration before factory acceptance testing." };
+  const model = getModel(order.modelId);
+  const stats = configuredStats(order.modelId, order.upgradeIds);
+  if (!spend(state, "testing", `Factory acceptance test · ${model.name}`, model.testCost)) return { ok: false, reason: `Factory acceptance needs ${formatMoney(model.testCost)}.` };
+  order.stage = "testing";
+  order.readyAt = state.totalMinutes + stats.testHours * 60;
+  state.tutorial.tested = true;
+  pushMessage(state, "Factory test running", `Alarm mapping, health, recovery and configured analytics are under test.`, "info");
+  return { ok: true, message: "Factory acceptance test started." };
+}
+
+export function validatePlacement(state: GameState, orderId: string, x: number, y: number): ActionResult {
+  const order = state.orders.find((candidate) => candidate.id === orderId);
+  if (!order || order.stage !== "ready") return { ok: false, reason: "Select a tested asset that is ready for site deployment." };
+  if (x < 0 || y < 0 || x >= state.world.width || y >= state.world.height) return { ok: false, reason: "That tile is outside the camp map." };
+  const tile = getPackedTile(state.world, x, y);
+  if (tileOwnership(tile) !== "owned") return { ok: false, reason: "The camp does not own this tile." };
+  if (isTileBlocked(state.world, x, y)) return { ok: false, reason: "A building, fence or water feature occupies this tile." };
+  if (state.devices.some((device) => (Math.round(device.x) === x && Math.round(device.y) === y) || (Math.round(device.homeX ?? device.x) === x && Math.round(device.homeY ?? device.y) === y))) return { ok: false, reason: "Another device or mobile-system home position already occupies this tile." };
+  const model = getModel(order.modelId);
+  if (model.allowedTerrain === "flat" && tileHeight(tile) > 0) return { ok: false, reason: `${model.shortName} needs a level mounting tile.` };
+  if (model.kind === "drone") {
+    const onPad = state.world.structures.some((structure) => structure.type === "drone-pad" && x >= structure.x && x < structure.x + structure.width && y >= structure.y && y < structure.y + structure.height);
+    if (!onPad) return { ok: false, reason: "A patrol drone must be deployed on the central drone pad." };
+  }
+  return { ok: true, message: "Valid deployment tile." };
+}
+
+export function placeOrder(state: GameState, orderId: string, x: number, y: number, facing?: number): ActionResult {
+  const validation = validatePlacement(state, orderId, x, y);
+  if (!validation.ok) return validation;
+  const index = state.orders.findIndex((candidate) => candidate.id === orderId);
+  const order = state.orders[index];
+  if (!order) return { ok: false, reason: "That asset is no longer in the deployment queue." };
+  const model = getModel(order.modelId);
+  const device: Device = {
+    id: nextId(state, "device"), modelId: order.modelId, upgradeIds: [...order.upgradeIds], name: `${model.shortName} ${state.devices.length + 1}`,
+    x, y, status: "awaiting-sat", readyAt: 0, health: 1, commissionedAt: null, detections: 0, falseAlarms: 0,
+    facing: model.kind === "camera" ? facing ?? Math.atan2(y + 0.5 - 50, x + 0.5 - 50) : undefined,
+    homeX: model.kind === "robot" || model.kind === "drone" ? x : undefined,
+    homeY: model.kind === "robot" || model.kind === "drone" ? y : undefined,
+    assignedIncidentId: model.kind === "robot" || model.kind === "drone" ? null : undefined,
+    path: model.kind === "robot" ? [] : undefined,
+  };
+  state.devices.push(device);
+  state.orders.splice(index, 1);
+  state.tutorial.deployed = true;
+  pushMessage(state, "Installation complete", `${device.name} is mounted at sector ${x}.${y}. Run site acceptance to make it operational.`, "good");
+  recalculateRating(state);
+  return { ok: true, message: `${device.name} installed; SAT is required.` };
+}
+
+export function commissionDevice(state: GameState, deviceId: string): ActionResult {
+  const device = state.devices.find((candidate) => candidate.id === deviceId);
+  if (!device) return { ok: false, reason: "That device no longer exists." };
+  if (device.status !== "awaiting-sat") return { ok: false, reason: "Only installed devices awaiting SAT can be commissioned." };
+  const model = getModel(device.modelId);
+  if (!spend(state, "commissioning", `Site acceptance and commissioning · ${device.name}`, model.commissionCost)) return { ok: false, reason: `Site acceptance requires ${formatMoney(model.commissionCost)}.` };
+  device.status = "commissioning";
+  device.readyAt = state.totalMinutes + 3 * 60;
+  pushMessage(state, "Site acceptance started", `${device.name} is running an end-to-end alarm and response test.`, "info");
+  return { ok: true, message: "Commissioning started." };
+}
+
+export function hireStaff(state: GameState, role: StaffRole): ActionResult {
+  const recruitmentCost = role === "engineer" ? 12_000 : 8_000;
+  if (!spend(state, "recruitment", `Recruitment and training · ${role}`, recruitmentCost)) return { ok: false, reason: `Recruitment requires ${formatMoney(recruitmentCost)}.` };
+  const roleMembers = state.staff.filter((member) => member.role === role);
+  const shiftCounts = [0, 1, 2].map((shift) => roleMembers.filter((member) => member.shift === shift).length);
+  const smallest = Math.min(...shiftCounts);
+  const shift = Math.max(0, shiftCounts.indexOf(smallest)) as 0 | 1 | 2;
+  const member = createStaff(state, role, shift);
+  state.staff.push(member);
+  state.tutorial.hired = true;
+  pushMessage(state, "New starter", `${member.name} joined the ${shiftLabel(shift)} shift.`, "good");
+  recalculateRating(state);
+  return { ok: true, message: `${member.name} hired.` };
+}
+
+export function verifyIncident(state: GameState, incidentId: string): ActionResult {
+  const incident = state.incidents.find((candidate) => candidate.id === incidentId);
+  if (!incident) return { ok: false, reason: "That alarm is no longer in the incident queue." };
+  if (incident.status !== "new") return { ok: false, reason: "This alarm has already been acknowledged." };
+  const operators = onDutyStaff(state, "operator");
+  if (operators.length === 0) return { ok: false, reason: "No operator is on duty to validate the evidence." };
+  incident.status = "verifying";
+  incident.readyAt = state.totalMinutes + Math.max(12, 55 - operators.length * 8);
+  return { ok: true, message: "Operator is validating the alarm." };
+}
+
+export function dispatchIncident(state: GameState, incidentId: string): ActionResult {
+  const incident = state.incidents.find((candidate) => candidate.id === incidentId);
+  if (!incident) return { ok: false, reason: "That incident no longer exists." };
+  if (incident.status !== "verified") return { ok: false, reason: "Operator validation is required before dispatch." };
+  const trooper = onDutyStaff(state, "trooper").find((member) => member.assignedIncidentId === null);
+  const mobile = state.devices
+    .filter((device) => device.status === "operational" && ["robot", "drone"].includes(getModel(device.modelId).kind)
+      && !state.incidents.some((candidate) => candidate.status === "responding" && candidate.assignedResponderId === device.id))
+    .sort((a, b) => Math.hypot(a.x - incident.x, a.y - incident.y) - Math.hypot(b.x - incident.x, b.y - incident.y))[0];
+  if (!trooper && !mobile) return { ok: false, reason: "No on-duty trooper or operational mobile responder is available." };
+  let responderId: string;
+  let distance: number;
+  let responsePower = 0.55;
+  if (trooper) {
+    responderId = trooper.id;
+    distance = Math.hypot(trooper.x - incident.x, trooper.y - incident.y);
+    trooper.assignedIncidentId = incident.id;
+    trooper.status = "responding";
+    trooper.targetX = incident.x;
+    trooper.targetY = incident.y;
+    trooper.path = [];
+  } else {
+    responderId = mobile?.id ?? "";
+    distance = Math.hypot((mobile?.x ?? 0) - incident.x, (mobile?.y ?? 0) - incident.y);
+    responsePower = mobile ? configuredStats(mobile.modelId, mobile.upgradeIds).responsePower : responsePower;
+    if (mobile) {
+      mobile.assignedIncidentId = incident.id;
+      mobile.path = [];
+    }
+  }
+  incident.status = "responding";
+  incident.assignedResponderId = responderId;
+  const movementSpeed = trooper ? 0.24 : 0.45 + responsePower * 0.2;
+  incident.readyAt = state.totalMinutes + Math.max(18, distance / movementSpeed);
+  pushMessage(state, "Response dispatched", `${trooper?.name ?? mobile?.name ?? "Responder"} is moving to sector ${Math.round(incident.x)}.${Math.round(incident.y)}.`, "info");
+  return { ok: true, message: "Response unit dispatched." };
+}
+
+export function decommissionAt(state: GameState, x: number, y: number): ActionResult {
+  const candidate = state.devices
+    .map((device, index) => ({ device, index, distance: Math.hypot(device.x - x, device.y - y) }))
+    .filter((item) => item.distance < 0.5)
+    .sort((a, b) => a.distance - b.distance)[0];
+  const index = candidate?.index ?? -1;
+  const device = candidate?.device;
+  if (!device) return { ok: false, reason: "There is no removable device on this tile." };
+  if (state.incidents.some((incident) => incident.status === "responding" && incident.assignedResponderId === device.id)) {
+    return { ok: false, reason: `${device.name} is assigned to an active response and cannot be removed.` };
+  }
+  const refund = Math.round(configuredStats(device.modelId, device.upgradeIds).purchaseCost * 0.2 * device.health);
+  state.incidents
+    .filter((incident) => incident.type === "system-fault" && incident.sourceDeviceIds.includes(device.id) && ["new", "verifying", "verified", "responding"].includes(incident.status))
+    .forEach((incident) => {
+      incident.status = "resolved";
+      incident.resolution = "The affected device was decommissioned and removed from the operational baseline.";
+      incident.assignedResponderId = null;
+    });
+  state.devices.splice(index, 1);
+  postLedger(state, "refund", `Decommissioning value · ${device.name}`, refund);
+  pushMessage(state, "Device decommissioned", `${device.name} removed; ${formatMoney(refund)} residual value returned.`, "warning");
+  recalculateRating(state);
+  return { ok: true, message: `${device.name} removed.` };
+}
+
+export function onDutyStaff(state: GameState, role: StaffRole) {
+  const hour = calendarFromMinutes(state.totalMinutes).hour;
+  const shift = (hour < 8 ? 0 : hour < 16 ? 1 : 2) as 0 | 1 | 2;
+  return state.staff.filter((member) => member.role === role && member.shift === shift);
+}
+
+export function activeIncidents(state: GameState): Incident[] {
+  return state.incidents.filter((incident) => !["resolved", "dismissed", "missed"].includes(incident.status));
+}
+
+export function formatMoney(value: number): string {
+  const sign = value < 0 ? "−" : "";
+  const absolute = Math.abs(value);
+  if (absolute >= 1_000_000) return `${sign}$${(absolute / 1_000_000).toFixed(2)}m`;
+  if (absolute >= 1_000) return `${sign}$${Math.round(absolute / 1_000)}k`;
+  return `${sign}$${Math.round(absolute)}`;
+}
+
+function shiftLabel(shift: 0 | 1 | 2): string {
+  return shift === 0 ? "00:00–08:00" : shift === 1 ? "08:00–16:00" : "16:00–00:00";
+}

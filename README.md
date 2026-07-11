@@ -1,0 +1,138 @@
+# Parkwright: Camp Overwatch
+
+Camp Overwatch is a single-player, isometric security-capability management game for the browser. Configure cameras, LiDAR, robots, drones, and lighting; bring them through procurement and assurance; staff three shifts; then prove the design against real intrusions, bad weather, false alarms, and a finite command budget.
+
+This repository contains a playable vertical slice built from scratch with strict TypeScript, Canvas 2D, HTML/CSS, and Vite. It uses no game engine and has no runtime package dependencies. Gameplay sprites and world art are generated in code at runtime.
+
+## Quick start
+
+Requirements: a current desktop browser, Node.js 20 or newer, and npm.
+
+```bash
+npm install
+npm run dev
+```
+
+Open the local URL printed by Vite, normally `http://localhost:5173`.
+
+For a production build:
+
+```bash
+npm run build
+npm run preview
+```
+
+The static bundle is written to `dist/`. `vite.config.ts` uses a relative asset base so the bundle can be hosted below a path as well as at a domain root. Use a file server rather than opening `dist/index.html` directly from `file://`.
+
+## Play
+
+Choose one of three objective scenarios from **New Operation**, or start the endless **Open Command** Sandbox. Every mode begins with two legacy cameras and a basic three-shift workforce.
+
+The first-capability loop is:
+
+1. Open **Capability** and select a model and compatible options.
+2. Check acquisition, whole-programme cost, lead time, and forecast performance, then approve the purchase order.
+3. Open **Delivery** after the supplier lead time and approve the ICD/C2 integration.
+4. Run factory acceptance when integration completes.
+5. Deploy the tested asset on a valid owned tile using the placement ghost.
+6. Run site acceptance; only then does it become operational.
+7. Use **C2 Alarms** to validate incoming evidence and dispatch verified incidents.
+8. Watch workforce happiness, recurring cost, coverage, uptime, rating, and command funding; expand where the evidence says the camp is weak.
+
+The command checklist at the left of the game screen walks through this sequence and the first alarm response.
+
+## Controls
+
+| Input | Action |
+| --- | --- |
+| Left-drag | Pan the map |
+| WASD or arrow keys | Pan the map |
+| Move to a screen edge | Pan when no management window is open |
+| Mouse wheel, `+`, `-` | Zoom |
+| Space | Pause or resume the previous speed |
+| `1`, `2`, `4` | Set simulation speed |
+| `F` | Toggle operational coverage |
+| `Q`, `E` | Rotate a fixed camera's 90-degree placement preview |
+| Tab | Focus the oldest active alarm and open C2 |
+| Esc | Cancel the active tool, otherwise close the top window |
+| Right-click | Cancel placement or decommission mode |
+| Ctrl+Z | Reserved for builder undo; currently reports when no action can be undone |
+
+Click an operational device on the map to inspect its condition, certified configuration, detections, and false alarms. The Remove tool returns a condition-adjusted residual value and asks you to commit by clicking the device.
+
+## What is implemented
+
+- Deterministic 100x100 isometric camp with terrain, ownership, perimeter, roads, facilities, and a drone pad.
+- Seven device models and 18 configuration options across cameras, LiDAR, robots, drones, and floodlights, including fixed camera FOV and a true panoramic upgrade.
+- Procurement, supplier lead time, ICD integration, factory acceptance, map deployment, site acceptance, operation, faults, repair, and decommissioning.
+- Scouts, thieves, and saboteurs with probabilistic layered detection, day/night effects, rain, fog, storms, and security losses.
+- Operator validation, trooper/mobile dispatch, response outcomes, incident history, and C2 notifications.
+- Troopers, operators, and engineers on three shifts with fatigue, happiness, payroll, and hiring.
+- A traceable ledger, recurring O&S, monthly command allocations, cost savings, emergency continuity funding, and refunds.
+- Explainable security rating, readiness, capability points, and progression from Fragile to Exemplary.
+- Three scenarios, endless Sandbox, an eight-step tutorial checklist, manual save, monthly autosave, and JSON import/export.
+- Code-generated sprite atlas and procedural Canvas world rendering with HTML/CSS management UI.
+
+The detailed product boundary, formulas, roadmap, milestones, and corrected acceptance criteria are in [GAME_DESIGN.md](./GAME_DESIGN.md). Exact current tuning and implementation notes are in [BALANCE.md](./BALANCE.md).
+
+## Saves
+
+The complete, versioned game state is serialized as JSON.
+
+- **Autosave:** one browser slot, updated at each monthly close and scenario ending.
+- **Manual save:** one browser slot, updated from Save & Settings.
+- **Export/Import:** portable JSON through Save & Settings.
+
+Browser slots use `localStorage`, so clearing site storage removes them. Export a JSON copy before clearing browser data or moving to another browser profile.
+
+## Development scripts
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start Vite with LAN-accessible host binding |
+| `npm run build` | Type-check and create the production bundle |
+| `npm run preview` | Serve the production bundle locally |
+| `npm test` | Run the Vitest suite once |
+| `npm run test:watch` | Run Vitest in watch mode |
+| `npm run lint` | Run strict TypeScript checking |
+
+Run the full verification set before handing off a change:
+
+```bash
+npm test
+npm run build
+```
+
+The tests cover seeded RNG, projection, deterministic A*, economy and lifecycle gates, environment-sensitive detection, save round-trips, and a scripted three-year headless simulation that checks finite state and ledger conservation.
+
+## Architecture
+
+```text
+src/
+  core/       time, serializable seeded RNG, event bus, save/load
+  game/       state types, catalogue, scenarios, creation, player actions
+  world/      packed tiles, camp generation, deterministic A*
+  sim/        simulation, incidents, workforce, weather, economy, rating
+  render/     isometric projection, generated sprite atlas, Canvas renderer
+  ui/         framework-free application shell, HUD, tools, windows
+  main.ts
+tests/        unit, integration, detection, save, and endurance tests
+```
+
+The simulation advances on a fixed 10 Hz accumulator. At 1x, each tick advances 3.2 game minutes, so one game day takes 45 real seconds. Rendering uses `requestAnimationFrame` and continues while paused. Authoritative state is plain data and all simulation randomness comes from the saved RNG stream.
+
+The Canvas draws terrain, structures, weather, coverage, and entities. HTML/CSS draws every interactive widget so text remains crisp, selectable, keyboard-friendly, and independent of camera zoom.
+
+## Current scope
+
+Camp Overwatch is the game; “Parkwright” is the project codename inherited from the original brief. Theme-park guests, rides, coasters, and coaster physics are not part of this repository.
+
+The current vertical slice abstracts several systems that the design roadmap expands: vendor competition, editable ICD/test evidence, detailed programme risk, power and communications, routed robot/drone patrols, individual training/opinions, construction, land purchase, and scenario-defined larger maps. Multiplayer, 3D, injuries/fatalities, real-money systems, mobile-first UI, mods, localization, and audio are explicit non-goals for this release.
+
+## Troubleshooting
+
+- **Blank page after building:** serve `dist/` with `npm run preview` or another static server; do not rely on `file://` module loading.
+- **Continue is disabled:** no browser save exists yet. Start a game and use Save & Settings, or reach the first monthly close.
+- **A device will not deploy:** read the placement ribbon/toast. The tile must be owned and unblocked; flat devices reject raised ground; drones require the central pad.
+- **A camera never raises an alarm:** a Fixed Camera without a VA option needs an on-duty operator for manual detection. Edge-AI or a `VA` module enables automatic analytics.
+- **An incident cannot be dispatched:** validate it first and ensure an unassigned on-duty trooper or an operational robot/drone is available.
