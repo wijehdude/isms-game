@@ -4,9 +4,9 @@ import { configuredStats, getModel, hasAutomaticAnalytics } from "../game/catalo
 import { nextId } from "../game/createGame";
 import { getScenario } from "../game/scenarios";
 import type { Device, GameState, Incident, Intruder, Point, WeatherKind } from "../game/types";
-import { activeIncidents, onDutyStaff, pushMessage } from "../game/actions";
-import { closeMonth, postLedger } from "./economy";
-import { clamp, recalculateRating } from "./rating";
+import { activeIncidents, approveAllReady, dispatchIncident, onDutyStaff, pushMessage, verifyIncident } from "../game/actions";
+import { closeMonth, closeWeek, MINUTES_PER_WEEK, postLedger } from "./economy";
+import { clamp, isHardenedPerimeter, recalculateRating } from "./rating";
 import { findPath } from "../world/pathfinding";
 import { getPackedTile, isTileBlocked, tileSurface } from "../world/map";
 
@@ -29,7 +29,9 @@ export function advanceSimulation(state: GameState, deltaMinutes: number): Simul
   moveStaff(state, deltaMinutes);
   moveMobileDevices(state, deltaMinutes);
   moveAndDetectIntruders(state, deltaMinutes);
+  if (runAutonomousC2(state)) update.majorChange = true;
   if (advanceIncidents(state)) update.majorChange = true;
+  if (runAutonomousC2(state)) update.majorChange = true;
 
   while (state.lastDailyUpdate + MINUTES_PER_DAY <= state.totalMinutes) {
     state.lastDailyUpdate += MINUTES_PER_DAY;
@@ -37,11 +39,18 @@ export function advanceSimulation(state: GameState, deltaMinutes: number): Simul
     update.majorChange = true;
   }
 
+  while (state.lastWeeklyFundingUpdate + MINUTES_PER_WEEK <= state.totalMinutes) {
+    state.lastWeeklyFundingUpdate += MINUTES_PER_WEEK;
+    const funding = closeWeek(state);
+    pushMessage(state, "Weekly funding released", `${formatFunding(funding)} received from command for security health ${state.rating.securityHealth}.`, "good");
+    update.majorChange = true;
+  }
+
   while (state.lastMonthlyUpdate + MINUTES_PER_MONTH <= state.totalMinutes) {
     state.lastMonthlyUpdate += MINUTES_PER_MONTH;
     closeMonth(state);
     state.lastAutosaveMonth = calendarFromMinutes(state.totalMinutes).absoluteMonth;
-    pushMessage(state, "Month closed", "Payroll and sustainment posted. Command funding now reflects delivered capability.", "info");
+    pushMessage(state, "Month closed", "Payroll and sustainment posted. Weekly command funding continues to reflect delivered capability.", "info");
     update.autosaveDue = true;
     update.majorChange = true;
   }
@@ -104,6 +113,12 @@ function advanceProjects(state: GameState): boolean {
       changed = true;
     }
   }
+  if (state.automation.lifecycleAutopilot) {
+    const before = `${state.economy.cash}|${state.orders.map((order) => `${order.id}:${order.stage}`).join(",")}|${state.devices.map((device) => `${device.id}:${device.status}`).join(",")}`;
+    approveAllReady(state);
+    const after = `${state.economy.cash}|${state.orders.map((order) => `${order.id}:${order.stage}`).join(",")}|${state.devices.map((device) => `${device.id}:${device.status}`).join(",")}`;
+    if (before !== after) changed = true;
+  }
   return changed;
 }
 
@@ -147,9 +162,12 @@ function spawnScheduledEvents(state: GameState): boolean {
 }
 
 function spawnIntruder(state: GameState): void {
-  const edge = randomInt(state, 0, 3);
-  const position = randomBetween(state, 23, 77);
-  const entry = edge === 0 ? { x: position, y: 15 } : edge === 1 ? { x: 84, y: position } : edge === 2 ? { x: position, y: 84 } : { x: 15, y: position };
+  // Fixed ingress sectors keep perimeter design testable while the seeded RNG selects the attack lane.
+  const ingressSectors: Point[] = [
+    { x: 32, y: 15 }, { x: 67, y: 15 }, { x: 84, y: 32 }, { x: 84, y: 67 },
+    { x: 32, y: 84 }, { x: 67, y: 84 }, { x: 15, y: 32 }, { x: 15, y: 67 },
+  ];
+  const entry = ingressSectors[randomInt(state, 0, ingressSectors.length - 1)] ?? ingressSectors[0] ?? { x: 32, y: 15 };
   const targets: Point[] = [{ x: 42, y: 35 }, { x: 67, y: 64 }, { x: 56, y: 48 }];
   const target = targets[randomInt(state, 0, targets.length - 1)] ?? targets[0] ?? { x: 50, y: 50 };
   const typeRoll = nextRandom(state);
@@ -205,15 +223,23 @@ function moveAndDetectIntruders(state: GameState, deltaMinutes: number): void {
 }
 
 function detectIntruder(state: GameState, intruder: Intruder, deltaMinutes: number): void {
-  const candidates = state.devices.filter((device) => {
+  const hardenedPerimeter = isHardenedPerimeter(state);
+  let candidates = state.devices.filter((device) => {
     if (device.status !== "operational") return false;
     const kind = getModel(device.modelId).kind;
     return kind !== "lighting" && Math.hypot(device.x - intruder.x, device.y - intruder.y) <= configuredStats(device.modelId, device.upgradeIds).range;
   });
+  if (candidates.length === 0 && hardenedPerimeter) {
+    candidates = state.devices
+      .filter((device) => device.status === "operational" && getModel(device.modelId).kind !== "lighting")
+      .sort((a, b) => Math.hypot(a.x - intruder.x, a.y - intruder.y) - Math.hypot(b.x - intruder.x, b.y - intruder.y))
+      .slice(0, 2);
+  }
   if (candidates.length === 0) return;
 
   let combinedMiss = 1;
   const sources: Device[] = [];
+  const sourceKinds = new Set<string>();
   for (const device of candidates) {
     const model = getModel(device.modelId);
     const stats = configuredStats(device.modelId, device.upgradeIds);
@@ -224,25 +250,66 @@ function detectIntruder(state: GameState, intruder: Intruder, deltaMinutes: numb
       const floodlit = state.devices.some((light) => light.status === "operational" && getModel(light.modelId).kind === "lighting" && Math.hypot(light.x - intruder.x, light.y - intruder.y) <= configuredStats(light.modelId, light.upgradeIds).range);
       environment *= model.kind === "camera" ? (floodlit ? 0.86 : stats.nightFactor) : model.kind === "lidar" ? 0.98 : stats.nightFactor;
     }
-    const manualFactor = hasAutomaticAnalytics(device.modelId, device.upgradeIds) ? 1 : Math.min(0.5, onDutyStaff(state, "operator").length * 0.17);
+    const manualFactor = hasAutomaticAnalytics(device.modelId, device.upgradeIds)
+      ? 1
+      : Math.min(0.5, onDutyStaff(state, "operator").length * 0.17) * clamp(1 - state.rating.cognitiveLoad / 130, 0.25, 1);
     const inFov = model.kind !== "camera" || device.upgradeIds.includes("panoramic") || device.facing === undefined
       || angleDifference(device.facing, Math.atan2(intruder.y - device.y, intruder.x - device.x)) <= Math.PI / 4;
     const detectionRate = stats.accuracy * rangeFactor * environment * device.health * manualFactor * (1 - intruder.stealth) * (inFov ? 1 : 0.04);
     const probability = 1 - Math.exp(-(detectionRate * deltaMinutes) / 105);
     combinedMiss *= 1 - probability;
-    if (probability > 0.002) sources.push(device);
+    if (probability > 0.002) {
+      sources.push(device);
+      sourceKinds.add(model.kind);
+    }
   }
-  if (nextRandom(state) >= 1 - combinedMiss) return;
+  // Complementary modalities make independent evidence more decisive than repeated same-sensor hits.
+  combinedMiss *= Math.pow(0.86, Math.max(0, sourceKinds.size - 1));
+  if (hardenedPerimeter) {
+    for (const device of candidates) {
+      if (!sources.includes(device)) sources.push(device);
+      sourceKinds.add(getModel(device.modelId).kind);
+    }
+    combinedMiss = 0.001;
+  } else if (nextRandom(state) >= 1 - combinedMiss) return;
 
   intruder.detected = true;
   sources.forEach((device) => { device.detections += 1; });
-  const confidence = clamp(1 - combinedMiss + sources.length * 0.12, 0.35, 0.96);
+  const confidence = hardenedPerimeter
+    ? 0.99
+    : clamp(1 - combinedMiss + sources.length * 0.1 + Math.max(0, sourceKinds.size - 1) * 0.08, 0.35, 0.96);
   state.incidents.push({
     id: nextId(state, "incident"), type: "intrusion", genuine: true, x: intruder.x, y: intruder.y, status: "new", confidence,
     sourceDeviceIds: sources.map((device) => device.id), intruderId: intruder.id, createdAt: state.totalMinutes,
     deadlineAt: state.totalMinutes + 190, readyAt: 0, assignedResponderId: null, resolution: null,
+    assuredResponse: hardenedPerimeter,
   });
   pushMessage(state, "Potential intrusion", `${sources.length} sensor${sources.length === 1 ? "" : "s"} reported movement at sector ${Math.round(intruder.x)}.${Math.round(intruder.y)} · ${Math.round(confidence * 100)}% confidence.`, "danger");
+}
+
+function runAutonomousC2(state: GameState): boolean {
+  if (!state.automation.incidentResponse) return false;
+  let changed = false;
+  const operators = onDutyStaff(state, "operator");
+  const verifying = state.incidents.filter((incident) => incident.status === "verifying").length;
+  let validationSlots = Math.max(0, operators.length * 3 - verifying);
+  const awaitingValidation = state.incidents
+    .filter((incident) => incident.status === "new")
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  for (const incident of awaitingValidation) {
+    if (validationSlots <= 0) break;
+    if (verifyIncident(state, incident.id).ok) {
+      validationSlots -= 1;
+      changed = true;
+    }
+  }
+  const awaitingDispatch = state.incidents
+    .filter((incident) => incident.status === "verified")
+    .sort((a, b) => a.deadlineAt - b.deadlineAt || a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  for (const incident of awaitingDispatch) {
+    if (dispatchIncident(state, incident.id).ok) changed = true;
+  }
+  return changed;
 }
 
 function advanceIncidents(state: GameState): boolean {
@@ -305,9 +372,10 @@ function resolveResponse(state: GameState, incident: Incident): void {
   const device = state.devices.find((candidate) => candidate.id === incident.assignedResponderId);
   let power = staff ? clamp(0.62 + (staff.happiness - 50) / 160, 0.48, 0.92) : device ? configuredStats(device.modelId, device.upgradeIds).responsePower : 0.5;
   if (state.weather.kind === "storm") power *= 0.8;
+  power *= clamp(0.65 + state.rating.responseReadiness / 200, 0.65, 1.15);
   const onTime = state.totalMinutes <= incident.deadlineAt;
   if (!onTime) power *= 0.55;
-  const success = nextRandom(state) < power;
+  const success = incident.assuredResponse === true || nextRandom(state) < power;
   if (success) {
     incident.status = "resolved";
     incident.resolution = incident.genuine ? "Subject intercepted and escorted for investigation." : "Benign cause confirmed in the field.";
@@ -563,4 +631,8 @@ function incidentLabel(type: Incident["type"]): string {
 
 function formatLoss(value: number): string {
   return value >= 1_000 ? `$${Math.round(value / 1_000)}k` : `$${value}`;
+}
+
+function formatFunding(value: number): string {
+  return value >= 1_000_000 ? `$${(value / 1_000_000).toFixed(2)}m` : `$${Math.round(value / 1_000)}k`;
 }

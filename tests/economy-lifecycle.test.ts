@@ -11,7 +11,7 @@ import {
   validatePlacement,
 } from "../src/game/actions";
 import { createGame } from "../src/game/createGame";
-import { assertLedgerIdentity, closeMonth, projectedMonthlyCosts } from "../src/sim/economy";
+import { assertLedgerIdentity, closeMonth, closeWeek, projectedMonthlyCosts, weeklyFundingAmount } from "../src/sim/economy";
 
 const NEVER = Number.MAX_SAFE_INTEGER;
 
@@ -27,6 +27,7 @@ describe("capability procurement lifecycle", () => {
     state.nextThreatAt = NEVER;
     state.nextFalseAlarmAt = NEVER;
     state.weather.nextChangeAt = NEVER;
+    state.automation.lifecycleAutopilot = false;
     const initialCash = state.economy.cash;
     const upgrades = ["va-intrusion", "infrared"];
     const stats = configuredStats("camera-fixed", upgrades);
@@ -96,10 +97,27 @@ describe("capability procurement lifecycle", () => {
     expect(state.economy.ledger).toHaveLength(ledgerLength);
     expect(assertLedgerIdentity(state)).toBe(true);
   });
+
+  it("creates individually deployable records for a batch purchase", () => {
+    const state = createGame("sandbox", 456);
+    const stats = configuredStats("camera-edge", ["va-intrusion"]);
+    const initialCash = state.economy.cash;
+
+    expect(procureDevice(state, "camera-edge", ["va-intrusion"], 3)).toEqual({
+      ok: true,
+      message: "3 Edge-AI camera units ordered.",
+    });
+    expect(state.orders).toHaveLength(3);
+    expect(new Set(state.orders.map((order) => order.batchId)).size).toBe(1);
+    expect(state.orders.every((order) => order.batchId && order.quotedCost === stats.totalProgrammeCost)).toBe(true);
+    expect(state.economy.cash).toBe(initialCash - stats.purchaseCost * 3);
+    expect(procureDevice(state, "camera-edge", [], 100).ok).toBe(false);
+    expect(assertLedgerIdentity(state)).toBe(true);
+  });
 });
 
 describe("monthly economy", () => {
-  it("posts funding, payroll and operations as a balanced ledger transaction set", () => {
+  it("posts payroll and operations while weekly funding remains separate", () => {
     const state = createGame("sandbox", 7_777);
     state.rating.campRating = 75;
     state.economy.stolenLosses = 0;
@@ -109,17 +127,16 @@ describe("monthly economy", () => {
     const costs = projectedMonthlyCosts(state);
 
     // Configured monthly O&S includes the catalogue base plus 0.15% of purchase price.
-    expect(costs).toEqual({ payroll: 145_000, operations: 1_871, total: 146_871 });
+    expect(costs).toEqual({ payroll: 145_000, operations: 15_248, total: 160_248 });
     closeMonth(state);
 
-    expect(state.economy.ledger.slice(-3).map(({ category, amount }) => ({ category, amount }))).toEqual([
-      { category: "funding", amount: 195_000 },
+    expect(state.economy.ledger.slice(-2).map(({ category, amount }) => ({ category, amount }))).toEqual([
       { category: "payroll", amount: -145_000 },
-      { category: "operations", amount: -1_871 },
+      { category: "operations", amount: -15_248 },
     ]);
-    expect(state.economy.cash).toBe(initialCash + 48_129);
-    expect(state.economy.realisedSavings).toBe(128_129);
-    expect(state.economy.lifetimeFunding).toBe(initialFunding + 195_000);
+    expect(state.economy.cash).toBe(initialCash - 160_248);
+    expect(state.economy.realisedSavings).toBe(114_752);
+    expect(state.economy.lifetimeFunding).toBe(initialFunding);
     expect(state.economy.lifetimeSpend).toBe(initialSpend + costs.total);
     expect(assertLedgerIdentity(state)).toBe(true);
   });
@@ -130,8 +147,22 @@ describe("monthly economy", () => {
     state.devices[0]!.status = "fault";
     const withFault = projectedMonthlyCosts(state);
 
-    expect(normal.operations).toBe(1_871);
-    expect(withFault.operations).toBe(1_310);
+    expect(normal.operations).toBe(15_248);
+    expect(withFault.operations).toBe(14_687);
     expect(withFault.payroll).toBe(normal.payroll);
+  });
+
+  it("releases at least $2m weekly using the security-health formula rounded to $100", () => {
+    const state = createGame("sandbox", 9_999);
+    state.rating.securityHealth = 73.333;
+    state.rating.capabilityPoints = 1_234.2;
+    const initialCash = state.economy.cash;
+    const initialFunding = state.economy.lifetimeFunding;
+
+    expect(weeklyFundingAmount(state)).toBe(4_083_800);
+    expect(closeWeek(state)).toBe(4_083_800);
+    expect(state.economy.cash).toBe(initialCash + 4_083_800);
+    expect(state.economy.lifetimeFunding).toBe(initialFunding + 4_083_800);
+    expect(assertLedgerIdentity(state)).toBe(true);
   });
 });

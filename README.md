@@ -1,6 +1,6 @@
-# Parkwright: Camp Overwatch
+# Sentinel Base
 
-Camp Overwatch is a single-player, isometric security-capability management game for the browser. Configure cameras, LiDAR, robots, drones, and lighting; bring them through procurement and assurance; staff three shifts; then prove the design against real intrusions, bad weather, false alarms, and a finite command budget.
+Sentinel Base is a single-player, isometric security-capability management game for the browser. Configure cameras, LiDAR, robots, drones, and lighting; deliver an assured C2 capability; support three shifts; then watch the autonomous team deal with intrusions, weather, and false alarms.
 
 This repository contains a playable vertical slice built from scratch with strict TypeScript, Canvas 2D, HTML/CSS, and Vite. It uses no game engine and has no runtime package dependencies. Gameplay sprites and world art are generated in code at runtime.
 
@@ -26,18 +26,17 @@ The static bundle is written to `dist/`. `vite.config.ts` uses a relative asset 
 
 ## Play
 
-Choose one of three objective scenarios from **New Operation**, or start the endless **Open Command** Sandbox. Every mode begins with two legacy cameras and a basic three-shift workforce.
+Choose one of three objective scenarios from **New Operation**, or start the endless **Open Command** Sandbox. Every mode starts with a $20,000,000 command appropriation, eight operational intrusion-analytics cameras, twelve perimeter floodlights, and a basic three-shift workforce.
 
 The first-capability loop is:
 
-1. Open **Capability** and select a model and compatible options.
-2. Check acquisition, whole-programme cost, lead time, and forecast performance, then approve the purchase order.
-3. Open **Delivery** after the supplier lead time and approve the ICD/C2 integration.
-4. Run factory acceptance when integration completes.
-5. Deploy the tested asset on a valid owned tile using the placement ghost.
-6. Run site acceptance; only then does it become operational.
-7. Use **C2 Alarms** to validate incoming evidence and dispatch verified incidents.
-8. Watch workforce happiness, recurring cost, coverage, uptime, rating, and command funding; expand where the evidence says the camp is weak.
+1. Open **Capability**, select a model and compatible options, and choose a quantity from 1 to 99.
+2. Review the per-unit and whole-batch programme cost before placing the purchase order.
+3. Delivery Autopilot handles ICD/C2 integration, factory acceptance, and site acceptance when they become ready and funded. **Approve all ready** is available as an immediate catch-up control.
+4. Deploy each tested asset on a valid owned tile using the placement ghost; placement and camera orientation still matter.
+5. Watch the autonomous C2 team validate alarms and dispatch troopers, robots, or drones.
+6. Use the security-health view, workforce happiness, cognitive workload, recurring cost, and coverage to decide the next enhancement.
+7. Receive at least $2,000,000 in fresh command funding every in-game week; stronger security health and capability points increase the injection without a ceiling.
 
 The command checklist at the left of the game screen walks through this sequence and the first alarm response.
 
@@ -52,6 +51,7 @@ The command checklist at the left of the game screen walks through this sequence
 | Space | Pause or resume the previous speed |
 | `1`, `2`, `4` | Set simulation speed |
 | `F` | Toggle operational coverage |
+| `Home` or **Fit perimeter** | Fit the owned fenceline into the map view |
 | `Q`, `E` | Rotate a fixed camera's 90-degree placement preview |
 | Tab | Focus the oldest active alarm and open C2 |
 | Esc | Cancel the active tool, otherwise close the top window |
@@ -64,20 +64,20 @@ Click an operational device on the map to inspect its condition, certified confi
 
 - Deterministic 100x100 isometric camp with terrain, ownership, perimeter, roads, facilities, and a drone pad.
 - Seven device models and 18 configuration options across cameras, LiDAR, robots, drones, and floodlights, including fixed camera FOV and a true panoramic upgrade.
-- Procurement, supplier lead time, ICD integration, factory acceptance, map deployment, site acceptance, operation, faults, repair, and decommissioning.
+- Batch procurement (1-99 assets), supplier lead time, automated ICD integration, factory acceptance, map deployment, automated site acceptance, operation, faults, repair, and decommissioning.
 - Scouts, thieves, and saboteurs with probabilistic layered detection, day/night effects, rain, fog, storms, and security losses.
-- Operator validation, trooper/mobile dispatch, response outcomes, incident history, and C2 notifications.
+- Autonomous operator validation, trooper/mobile dispatch, response outcomes, incident history, and C2 notifications.
 - Troopers, operators, and engineers on three shifts with fatigue, happiness, payroll, and hiring.
-- A traceable ledger, recurring O&S, monthly command allocations, cost savings, emergency continuity funding, and refunds.
-- Explainable security rating, readiness, capability points, and progression from Fragile to Exemplary.
-- Three scenarios, endless Sandbox, an eight-step tutorial checklist, manual save, monthly autosave, and JSON import/export.
-- Code-generated sprite atlas and procedural Canvas world rendering with HTML/CSS management UI.
+- A traceable ledger, recurring O&S, weekly command allocations, cost savings, emergency continuity funding, and refunds.
+- Explainable security-health rating, response readiness, cognitive workload, capability points, and progression from Fragile to Exemplary.
+- Three scenarios, endless Sandbox, an optional five-step walkthrough, manual save, monthly autosave, and JSON import/export.
+- Code-generated sprite atlas, 0.20x-2.25x pointer-centred zoom, perimeter fitting, and cull/cached Canvas rendering with HTML/CSS management UI.
 
 The detailed product boundary, formulas, roadmap, milestones, and corrected acceptance criteria are in [GAME_DESIGN.md](./GAME_DESIGN.md). Exact current tuning and implementation notes are in [BALANCE.md](./BALANCE.md).
 
 ## Saves
 
-The complete, versioned game state is serialized as JSON.
+The complete, versioned Sentinel Base v2 game state is serialized as JSON. The earlier Camp Overwatch v1 saves are intentionally retired so every operation starts with the new baseline and simulation rules.
 
 - **Autosave:** one browser slot, updated at each monthly close and scenario ending.
 - **Manual save:** one browser slot, updated from Save & Settings.
@@ -125,7 +125,7 @@ The Canvas draws terrain, structures, weather, coverage, and entities. HTML/CSS 
 
 ## Current scope
 
-Camp Overwatch is the game; “Parkwright” is the project codename inherited from the original brief. Theme-park guests, rides, coasters, and coaster physics are not part of this repository.
+Sentinel Base is the game. Theme-park guests, rides, coasters, and coaster physics are not part of this repository.
 
 The current vertical slice abstracts several systems that the design roadmap expands: vendor competition, editable ICD/test evidence, detailed programme risk, power and communications, routed robot/drone patrols, individual training/opinions, construction, land purchase, and scenario-defined larger maps. Multiplayer, 3D, injuries/fatalities, real-money systems, mobile-first UI, mods, localization, and audio are explicit non-goals for this release.
 

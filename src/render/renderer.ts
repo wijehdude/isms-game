@@ -3,7 +3,25 @@ import { configuredStats, getModel } from "../game/catalog";
 import type { DeviceKind, GameState, Structure, WeatherKind } from "../game/types";
 import { getPackedTile, tileHeight, tileOwnership, tileSurface, worldIndex } from "../world/map";
 import { RuntimeSpriteAtlas, type SpriteName } from "./atlas";
-import { diamondPoints, projectIso, unprojectIso, type CameraState, type ScreenPoint, type Viewport } from "./projection";
+import {
+  MAX_ZOOM,
+  MIN_ZOOM,
+  VIEWPORT_ANCHOR_Y,
+  diamondPoints,
+  fitCameraToBounds,
+  projectIso,
+  unprojectIso,
+  visibleTileBounds,
+  zoomCameraAt,
+  type CameraState,
+  type ScreenPoint,
+  type TileBounds,
+  type Viewport,
+  type WorldBounds,
+} from "./projection";
+
+export const DEVICE_PIXEL_RATIO_CAP = 1.75;
+export type RendererOptions = { maxDevicePixelRatio?: number };
 
 export type RenderOverlay = {
   hoverTile: { x: number; y: number } | null;
@@ -17,27 +35,36 @@ export class IsoRenderer {
   readonly camera: CameraState = { focusX: 50, focusY: 50, offsetX: 0, offsetY: -48, zoom: 0.72 };
   private readonly context: CanvasRenderingContext2D;
   private readonly atlas = new RuntimeSpriteAtlas();
+  private readonly maxDevicePixelRatio: number;
   private viewport: Viewport = { width: 1, height: 1 };
   private devicePixelRatio = 1;
   private worldCache: GameState["world"] | null = null;
   private pathSet = new Set<number>();
   private groundStructures: Structure[] = [];
+  private groundTiles = new Map<number, Structure["type"]>();
+  private elevatedStructures: Structure[] = [];
   private fenceKeys = new Set<string>();
+  private maxTerrainHeight = 0;
+  private visibleTiles: TileBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  private terrainLayer: HTMLCanvasElement | null = null;
+  private terrainLayerKey = "";
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(private readonly canvas: HTMLCanvasElement, options: RendererOptions = {}) {
     const context = canvas.getContext("2d", { alpha: false });
-    if (!context) throw new Error("Canvas 2D is required to run Camp Overwatch.");
+    if (!context) throw new Error("Canvas 2D is required to run Sentinel Base.");
     this.context = context;
+    this.maxDevicePixelRatio = Math.max(1, Math.min(DEVICE_PIXEL_RATIO_CAP, options.maxDevicePixelRatio ?? DEVICE_PIXEL_RATIO_CAP));
     this.resize();
   }
 
   resize(): void {
-    this.devicePixelRatio = Math.min(2, window.devicePixelRatio || 1);
+    this.devicePixelRatio = Math.min(this.maxDevicePixelRatio, window.devicePixelRatio || 1);
     this.viewport = { width: window.innerWidth, height: window.innerHeight };
     this.canvas.width = Math.round(this.viewport.width * this.devicePixelRatio);
     this.canvas.height = Math.round(this.viewport.height * this.devicePixelRatio);
     this.canvas.style.width = `${this.viewport.width}px`;
     this.canvas.style.height = `${this.viewport.height}px`;
+    this.invalidateTerrainLayer();
   }
 
   render(state: GameState | null, overlay?: RenderOverlay): void {
@@ -47,7 +74,8 @@ export class IsoRenderer {
     this.drawBackdrop(state?.weather.kind ?? "clear", state?.totalMinutes ?? 9 * 60);
     if (!state) return;
     this.refreshWorldCache(state);
-    this.drawTerrain(state);
+    this.visibleTiles = visibleTileBounds(this.camera, this.viewport, state.world.width, state.world.height, 112, this.maxTerrainHeight);
+    this.drawTerrainLayer(state);
 
     if (overlay?.showCoverage) {
       state.devices.filter((device) => device.status === "operational").forEach((device) => {
@@ -84,8 +112,44 @@ export class IsoRenderer {
     this.camera.offsetY += dy;
   }
 
-  zoomBy(factor: number): void {
-    this.camera.zoom = Math.max(0.48, Math.min(1.65, this.camera.zoom * factor));
+  /** Backward-compatible centred zoom; pass screen coordinates to anchor it under a pointer. */
+  zoomBy(factor: number, screenX = this.viewport.width * 0.5, screenY = this.viewport.height * VIEWPORT_ANCHOR_Y): number {
+    return this.setZoom(this.camera.zoom * factor, screenX, screenY);
+  }
+
+  /** Multiplies zoom while preserving the ground point under the supplied screen position. */
+  zoomAt(screenX: number, screenY: number, factor: number): number {
+    return this.zoomBy(factor, screenX, screenY);
+  }
+
+  /** Sets an absolute zoom in the supported 0.20–2.25 range around a screen position. */
+  setZoom(zoom: number, screenX = this.viewport.width * 0.5, screenY = this.viewport.height * VIEWPORT_ANCHOR_Y): number {
+    Object.assign(this.camera, zoomCameraAt(this.camera, this.viewport, zoom, screenX, screenY));
+    return this.camera.zoom;
+  }
+
+  /** Fits the complete scenario world into the viewport. */
+  fitWorld(world: GameState["world"], padding = 48): number {
+    return this.fitBounds(world, { minX: 0, minY: 0, maxX: world.width, maxY: world.height }, padding);
+  }
+
+  /** Fits the owned camp perimeter, excluding off-limits and merely purchasable land. */
+  fitPerimeter(world: GameState["world"], padding = 64): number {
+    let minX = world.width;
+    let minY = world.height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < world.height; y += 1) {
+      for (let x = 0; x < world.width; x += 1) {
+        if (tileOwnership(getPackedTile(world, x, y)) !== "owned") continue;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x + 1);
+        maxY = Math.max(maxY, y + 1);
+      }
+    }
+    if (maxX < minX || maxY < minY) return this.fitWorld(world, padding);
+    return this.fitBounds(world, { minX, minY, maxX, maxY }, padding);
   }
 
   focusOn(x: number, y: number): void {
@@ -95,6 +159,10 @@ export class IsoRenderer {
     this.camera.offsetY = -40;
   }
 
+  get zoomRange(): Readonly<{ min: number; max: number }> {
+    return { min: MIN_ZOOM, max: MAX_ZOOM };
+  }
+
   deviceAt(state: GameState, screenX: number, screenY: number) {
     return state.devices
       .map((device) => ({ device, point: this.project(device.x + 0.5, device.y + 0.5) }))
@@ -102,12 +170,45 @@ export class IsoRenderer {
       .sort((a, b) => Math.hypot(a.point.x - screenX, a.point.y - screenY) - Math.hypot(b.point.x - screenX, b.point.y - screenY))[0]?.device ?? null;
   }
 
+  private fitBounds(world: GameState["world"], bounds: WorldBounds, padding: number): number {
+    let maxZ = 0;
+    const minTileX = Math.max(0, Math.floor(bounds.minX));
+    const minTileY = Math.max(0, Math.floor(bounds.minY));
+    const maxTileX = Math.min(world.width - 1, Math.ceil(bounds.maxX) - 1);
+    const maxTileY = Math.min(world.height - 1, Math.ceil(bounds.maxY) - 1);
+    for (let y = minTileY; y <= maxTileY; y += 1) {
+      for (let x = minTileX; x <= maxTileX; x += 1) maxZ = Math.max(maxZ, tileHeight(getPackedTile(world, x, y)));
+    }
+    Object.assign(this.camera, fitCameraToBounds({ ...bounds, minZ: 0, maxZ }, this.viewport, padding));
+    return this.camera.zoom;
+  }
+
+  private invalidateTerrainLayer(): void {
+    this.terrainLayerKey = "";
+  }
+
   private refreshWorldCache(state: GameState): void {
     if (this.worldCache === state.world) return;
     this.worldCache = state.world;
     this.pathSet = new Set(state.world.paths);
     this.groundStructures = state.world.structures.filter((structure) => ["road", "walkway", "parade", "track", "drone-pad"].includes(structure.type));
+    this.groundTiles.clear();
+    for (const structure of this.groundStructures) {
+      const maxY = Math.min(state.world.height, structure.y + structure.height);
+      const maxX = Math.min(state.world.width, structure.x + structure.width);
+      for (let y = Math.max(0, structure.y); y < maxY; y += 1) {
+        for (let x = Math.max(0, structure.x); x < maxX; x += 1) {
+          const index = worldIndex(state.world, x, y);
+          if (!this.groundTiles.has(index)) this.groundTiles.set(index, structure.type);
+        }
+      }
+    }
+    this.elevatedStructures = state.world.structures
+      .filter((structure) => !["road", "walkway", "parade", "track", "drone-pad"].includes(structure.type))
+      .sort((a, b) => a.x + a.y + a.width + a.height - (b.x + b.y + b.width + b.height));
     this.fenceKeys = new Set(state.world.structures.filter((structure) => structure.type === "fence").map((structure) => `${structure.x},${structure.y}`));
+    this.maxTerrainHeight = state.world.tiles.reduce((highest, tile) => Math.max(highest, tileHeight(tile)), 0);
+    this.invalidateTerrainLayer();
   }
 
   private drawBackdrop(weather: WeatherKind, minutes: number): void {
@@ -121,12 +222,42 @@ export class IsoRenderer {
     ctx.fillRect(0, 0, this.viewport.width, this.viewport.height);
   }
 
-  private drawTerrain(state: GameState): void {
-    const ctx = this.context;
-    const maxDepth = state.world.width + state.world.height - 2;
-    for (let depth = 0; depth <= maxDepth; depth += 1) {
-      const minX = Math.max(0, depth - state.world.height + 1);
-      const maxX = Math.min(state.world.width - 1, depth);
+  private drawTerrainLayer(state: GameState): void {
+    if (this.camera.zoom > 0.44) {
+      this.drawTerrain(state);
+      return;
+    }
+    const width = Math.max(1, Math.round(this.viewport.width * this.devicePixelRatio));
+    const height = Math.max(1, Math.round(this.viewport.height * this.devicePixelRatio));
+    const key = [state.world.width, state.world.height, this.viewport.width, this.viewport.height, this.devicePixelRatio, this.camera.focusX, this.camera.focusY, this.camera.offsetX, this.camera.offsetY, this.camera.zoom].join(":");
+    if (!this.terrainLayer) this.terrainLayer = document.createElement("canvas");
+    if (this.terrainLayer.width !== width || this.terrainLayer.height !== height) {
+      this.terrainLayer.width = width;
+      this.terrainLayer.height = height;
+      this.terrainLayerKey = "";
+    }
+    if (this.terrainLayerKey !== key) {
+      const layerContext = this.terrainLayer.getContext("2d");
+      if (!layerContext) {
+        this.drawTerrain(state);
+        return;
+      }
+      layerContext.setTransform(1, 0, 0, 1, 0, 0);
+      layerContext.clearRect(0, 0, width, height);
+      layerContext.setTransform(this.devicePixelRatio, 0, 0, this.devicePixelRatio, 0, 0);
+      layerContext.imageSmoothingEnabled = false;
+      this.drawTerrain(state, layerContext);
+      this.terrainLayerKey = key;
+    }
+    this.context.drawImage(this.terrainLayer, 0, 0, this.viewport.width, this.viewport.height);
+  }
+
+  private drawTerrain(state: GameState, ctx: CanvasRenderingContext2D = this.context): void {
+    const minDepth = this.visibleTiles.minX + this.visibleTiles.minY;
+    const maxDepth = this.visibleTiles.maxX + this.visibleTiles.maxY;
+    for (let depth = minDepth; depth <= maxDepth; depth += 1) {
+      const minX = Math.max(this.visibleTiles.minX, depth - this.visibleTiles.maxY);
+      const maxX = Math.min(this.visibleTiles.maxX, depth - this.visibleTiles.minY);
       for (let x = minX; x <= maxX; x += 1) {
         const y = depth - x;
         const packed = getPackedTile(state.world, x, y);
@@ -135,18 +266,20 @@ export class IsoRenderer {
         const radiusX = 34 * this.camera.zoom;
         const radiusY = 18 * this.camera.zoom;
         if (center.x < -radiusX || center.y < -radiusY || center.x > this.viewport.width + radiusX || center.y > this.viewport.height + radiusY) continue;
-        const ground = this.groundAt(x, y);
+        const ground = this.groundAt(state, x, y);
         const points = diamondPoints(x, y, z, this.camera, this.viewport);
-        this.pathPolygon(points);
-        ctx.fillStyle = ground ? groundColor(ground.type) : terrainColor(tileSurface(packed), tileOwnership(packed), x, y);
+        this.pathPolygon(points, ctx);
+        ctx.fillStyle = ground ? groundColor(ground) : terrainColor(tileSurface(packed), tileOwnership(packed), x, y);
         ctx.fill();
-        ctx.strokeStyle = ground ? "rgba(34,48,43,.18)" : "rgba(31,62,43,.16)";
-        ctx.lineWidth = Math.max(0.55, this.camera.zoom * 0.7);
-        ctx.stroke();
-        if (z > 0) this.drawTerrainSides(points, z);
+        if (this.camera.zoom >= 0.34) {
+          ctx.strokeStyle = ground ? "rgba(34,48,43,.18)" : "rgba(31,62,43,.16)";
+          ctx.lineWidth = Math.max(0.55, this.camera.zoom * 0.7);
+          ctx.stroke();
+        }
+        if (z > 0 && this.camera.zoom >= 0.3) this.drawTerrainSides(points, z, ctx);
         if (this.pathSet.has(worldIndex(state.world, x, y))) {
           const inner = points.map((point) => ({ x: center.x + (point.x - center.x) * 0.58, y: center.y + (point.y - center.y) * 0.58 }));
-          this.pathPolygon(inner);
+          this.pathPolygon(inner, ctx);
           ctx.fillStyle = "#b7ad86";
           ctx.fill();
         }
@@ -168,20 +301,20 @@ export class IsoRenderer {
   private drawWorldObjects(state: GameState, overlay?: RenderOverlay): void {
     type DrawEntity = { depth: number; x: number; y: number; sprite: SpriteName; alpha?: number; status?: string; selected?: boolean };
     type WorldObject = { depth: number; layer: number; structure?: Structure; entity?: DrawEntity };
-    const objects: WorldObject[] = state.world.structures
-      .filter((structure) => !["road", "walkway", "parade", "track", "drone-pad"].includes(structure.type))
+    const objects: WorldObject[] = this.elevatedStructures
+      .filter((structure) => this.structureWithinVisibleTiles(structure))
       .map((structure) => ({
         depth: structure.x + structure.y + (structure.type === "building" || structure.type === "gate" ? structure.width + structure.height : 1),
         layer: structure.type === "fence" ? 1 : 2,
         structure,
       }));
-    state.devices.forEach((device) => {
+    state.devices.filter((device) => this.pointWithinVisibleTiles(device.x, device.y)).forEach((device) => {
       const kind = getModel(device.modelId).kind;
       objects.push({ depth: device.x + device.y + 0.8, layer: 3, entity: { depth: device.x + device.y, x: device.x + 0.5, y: device.y + 0.5, sprite: spriteForDevice(kind, device.modelId), alpha: device.status === "operational" ? 1 : 0.62, status: device.status, selected: device.id === overlay?.selectedDeviceId } });
     });
     const insideBuilding = (x: number, y: number) => state.world.structures.some((structure) => structure.type === "building" && x >= structure.x && x < structure.x + structure.width && y >= structure.y && y < structure.y + structure.height);
-    state.staff.filter((member) => !insideBuilding(member.x, member.y)).forEach((member) => objects.push({ depth: member.x + member.y, layer: 3, entity: { depth: member.x + member.y, x: member.x, y: member.y, sprite: member.role } }));
-    state.intruders.filter((intruder) => intruder.detected && !insideBuilding(intruder.x, intruder.y)).forEach((intruder) => objects.push({ depth: intruder.x + intruder.y, layer: 3, entity: { depth: intruder.x + intruder.y, x: intruder.x, y: intruder.y, sprite: "intruder" } }));
+    state.staff.filter((member) => this.pointWithinVisibleTiles(member.x, member.y) && !insideBuilding(member.x, member.y)).forEach((member) => objects.push({ depth: member.x + member.y, layer: 3, entity: { depth: member.x + member.y, x: member.x, y: member.y, sprite: member.role } }));
+    state.intruders.filter((intruder) => intruder.detected && this.pointWithinVisibleTiles(intruder.x, intruder.y) && !insideBuilding(intruder.x, intruder.y)).forEach((intruder) => objects.push({ depth: intruder.x + intruder.y, layer: 3, entity: { depth: intruder.x + intruder.y, x: intruder.x, y: intruder.y, sprite: "intruder" } }));
 
     objects.sort((a, b) => a.depth - b.depth || a.layer - b.layer);
     objects.forEach((object) => {
@@ -201,6 +334,22 @@ export class IsoRenderer {
   private drawEntity(entity: { x: number; y: number; sprite: SpriteName; alpha?: number; status?: string; selected?: boolean }): void {
     const point = this.project(entity.x, entity.y);
     if (!this.visible(point, 50)) return;
+    if (this.camera.zoom < 0.34) {
+      const radius = ["camera", "lidar", "robot-dog", "robot-humanoid", "drone", "lighting"].includes(entity.sprite) ? 3 : 1.8;
+      this.context.globalAlpha = entity.alpha ?? 1;
+      this.context.fillStyle = strategicSpriteColor(entity.sprite);
+      this.context.beginPath(); this.context.arc(point.x, point.y - radius, radius, 0, Math.PI * 2); this.context.fill();
+      this.context.globalAlpha = 1;
+      if (entity.selected) {
+        this.context.strokeStyle = "#f5cf68"; this.context.lineWidth = 1.5;
+        this.context.beginPath(); this.context.arc(point.x, point.y - radius, radius + 4, 0, Math.PI * 2); this.context.stroke();
+      }
+      if (entity.status && entity.status !== "operational") {
+        this.context.fillStyle = entity.status === "fault" ? "#ef6a63" : "#e8b84f";
+        this.context.fillRect(point.x + radius, point.y - radius * 3, 3, 3);
+      }
+      return;
+    }
     const scale = Math.max(0.38, this.camera.zoom * (entity.sprite === "drone" ? 0.9 : 0.72));
     this.context.fillStyle = "rgba(17,31,26,.24)";
     this.context.beginPath(); this.context.ellipse(point.x, point.y + 3, 10 * scale, 4 * scale, 0, 0, Math.PI * 2); this.context.fill();
@@ -254,6 +403,7 @@ export class IsoRenderer {
     ctx.strokeStyle = "#5d665d";
     ctx.lineWidth = Math.max(1, this.camera.zoom * 2);
     ctx.beginPath(); ctx.moveTo(point.x, point.y + 2); ctx.lineTo(point.x, point.y - height); ctx.stroke();
+    if (this.camera.zoom < 0.42) return;
     const neighbors = [{ x: structure.x + 1, y: structure.y }, { x: structure.x, y: structure.y + 1 }];
     neighbors.forEach((neighbor) => {
       if (!this.fenceKeys.has(`${neighbor.x},${neighbor.y}`)) return;
@@ -338,6 +488,7 @@ export class IsoRenderer {
     const point = this.project(x, y);
     const radiusX = range * 45.25 * this.camera.zoom;
     const radiusY = range * 22.62 * this.camera.zoom;
+    if (point.x + radiusX < 0 || point.x - radiusX > this.viewport.width || point.y + radiusY < 0 || point.y - radiusY > this.viewport.height) return;
     this.context.beginPath(); this.context.ellipse(point.x, point.y, radiusX, radiusY, 0, 0, Math.PI * 2);
     this.context.fillStyle = fill; this.context.fill(); this.context.strokeStyle = stroke; this.context.lineWidth = 1.5; this.context.stroke();
   }
@@ -364,6 +515,7 @@ export class IsoRenderer {
       state.devices.filter((device) => device.status === "operational" && getModel(device.modelId).kind === "lighting").forEach((light) => {
         const point = this.project(light.x + 0.5, light.y + 0.5);
         const radius = configuredStats(light.modelId, light.upgradeIds).range * 23 * this.camera.zoom;
+        if (point.x + radius < 0 || point.x - radius > this.viewport.width || point.y + radius < 0 || point.y - radius > this.viewport.height) return;
         const gradient = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius);
         gradient.addColorStop(0, "rgba(255,224,126,.32)"); gradient.addColorStop(1, "rgba(255,224,126,0)");
         ctx.fillStyle = gradient; ctx.fillRect(point.x - radius, point.y - radius, radius * 2, radius * 2);
@@ -385,27 +537,38 @@ export class IsoRenderer {
     }
   }
 
-  private groundAt(x: number, y: number): Structure | undefined {
-    return this.groundStructures.find((structure) => x >= structure.x && x < structure.x + structure.width && y >= structure.y && y < structure.y + structure.height);
+  private groundAt(state: GameState, x: number, y: number): Structure["type"] | undefined {
+    return this.groundTiles.get(worldIndex(state.world, x, y));
   }
 
-  private drawTerrainSides(points: ScreenPoint[], z: number): void {
-    const ctx = this.context;
+  private drawTerrainSides(points: ScreenPoint[], z: number, ctx: CanvasRenderingContext2D = this.context): void {
     const drop = z * 16 * this.camera.zoom;
     const p1 = points[1]; const p2 = points[2]; const p3 = points[3];
     if (!p1 || !p2 || !p3) return;
-    this.pathPolygon([p1, p2, { x: p2.x, y: p2.y + drop }, { x: p1.x, y: p1.y + drop }]); ctx.fillStyle = "#496747"; ctx.fill();
-    this.pathPolygon([p2, p3, { x: p3.x, y: p3.y + drop }, { x: p2.x, y: p2.y + drop }]); ctx.fillStyle = "#3e593d"; ctx.fill();
+    this.pathPolygon([p1, p2, { x: p2.x, y: p2.y + drop }, { x: p1.x, y: p1.y + drop }], ctx); ctx.fillStyle = "#496747"; ctx.fill();
+    this.pathPolygon([p2, p3, { x: p3.x, y: p3.y + drop }, { x: p2.x, y: p2.y + drop }], ctx); ctx.fillStyle = "#3e593d"; ctx.fill();
   }
 
-  private pathPolygon(points: ScreenPoint[]): void {
+  private pathPolygon(points: ScreenPoint[], context: CanvasRenderingContext2D = this.context): void {
     const first = points[0];
     if (!first) return;
-    this.context.beginPath(); this.context.moveTo(first.x, first.y);
+    context.beginPath(); context.moveTo(first.x, first.y);
     for (let index = 1; index < points.length; index += 1) {
-      const point = points[index]; if (point) this.context.lineTo(point.x, point.y);
+      const point = points[index]; if (point) context.lineTo(point.x, point.y);
     }
-    this.context.closePath();
+    context.closePath();
+  }
+
+  private pointWithinVisibleTiles(x: number, y: number, margin = 3): boolean {
+    return x >= this.visibleTiles.minX - margin && y >= this.visibleTiles.minY - margin
+      && x <= this.visibleTiles.maxX + margin && y <= this.visibleTiles.maxY + margin;
+  }
+
+  private structureWithinVisibleTiles(structure: Structure, margin = 3): boolean {
+    return structure.x + structure.width >= this.visibleTiles.minX - margin
+      && structure.y + structure.height >= this.visibleTiles.minY - margin
+      && structure.x <= this.visibleTiles.maxX + margin
+      && structure.y <= this.visibleTiles.maxY + margin;
   }
 
   private visible(point: ScreenPoint, margin: number): boolean {
@@ -447,4 +610,16 @@ function spriteForDevice(kind: DeviceKind, modelId: string): SpriteName {
   if (kind === "drone") return "drone";
   if (kind === "lighting") return "lighting";
   return modelId === "robot-humanoid" ? "robot-humanoid" : "robot-dog";
+}
+
+function strategicSpriteColor(sprite: SpriteName): string {
+  if (sprite === "intruder") return "#ef6a63";
+  if (sprite === "trooper") return "#5b7692";
+  if (sprite === "operator") return "#d1a45b";
+  if (sprite === "engineer") return "#66a77c";
+  if (sprite === "lighting") return "#f4cf68";
+  if (sprite === "drone") return "#b9cbd0";
+  if (sprite === "camera") return "#72d5b3";
+  if (sprite === "lidar") return "#74a9d8";
+  return "#9bc779";
 }

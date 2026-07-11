@@ -35,25 +35,55 @@ export function createStaff(state: GameState, role: StaffRole, shift: 0 | 1 | 2)
   };
 }
 
-function createLegacyDevice(state: GameState, x: number, y: number, number: number): Device {
+function createBaselineDevice(
+  state: GameState,
+  modelId: "camera-fixed" | "floodlight",
+  x: number,
+  y: number,
+  number: number,
+  facing?: number,
+): Device {
+  const camera = modelId === "camera-fixed";
   return {
-    id: nextId(state, "device"), modelId: "camera-fixed", upgradeIds: ["va-intrusion"], name: `Legacy fence camera ${String(number).padStart(2, "0")}`,
-    x, y, status: "operational", readyAt: 0, health: 0.82, commissionedAt: -MINUTES_PER_DAY * 120, detections: 0, falseAlarms: 0,
-    facing: -Math.PI / 2,
+    id: nextId(state, "device"), modelId, upgradeIds: camera ? ["va-intrusion"] : [],
+    name: camera ? `Baseline intrusion camera ${String(number).padStart(2, "0")}` : `Baseline floodlight ${String(number).padStart(2, "0")}`,
+    x, y, status: "operational", readyAt: 0, health: 1, commissionedAt: -MINUTES_PER_DAY * 120, detections: 0, falseAlarms: 0,
+    facing: camera ? facing : undefined,
   };
+}
+
+function installBaselineSecurity(state: GameState): void {
+  const cameras = [
+    { x: 32, y: 19, facing: -Math.PI / 2 }, { x: 67, y: 19, facing: -Math.PI / 2 },
+    { x: 32, y: 80, facing: Math.PI / 2 }, { x: 67, y: 80, facing: Math.PI / 2 },
+    { x: 19, y: 32, facing: Math.PI }, { x: 19, y: 67, facing: Math.PI },
+    { x: 80, y: 32, facing: 0 }, { x: 80, y: 67, facing: 0 },
+  ];
+  const floodlights = [
+    { x: 25, y: 19 }, { x: 50, y: 19 }, { x: 75, y: 19 },
+    { x: 25, y: 80 }, { x: 50, y: 80 }, { x: 75, y: 80 },
+    { x: 19, y: 25 }, { x: 19, y: 50 }, { x: 19, y: 75 },
+    { x: 80, y: 25 }, { x: 80, y: 50 }, { x: 80, y: 75 },
+  ];
+  state.devices.push(...cameras.map((position, index) => createBaselineDevice(
+    state, "camera-fixed", position.x, position.y, index + 1, position.facing,
+  )));
+  state.devices.push(...floodlights.map((position, index) => createBaselineDevice(
+    state, "floodlight", position.x, position.y, index + 1,
+  )));
 }
 
 export function createGame(scenarioId: string, seedOverride?: number): GameState {
   const scenario = getScenario(scenarioId);
   const seed = seedOverride ?? scenario.seed;
   const state: GameState = {
-    version: 1,
+    version: 2,
     idCounter: 0,
     seed,
     rngState: hashSeed(seed),
     scenarioId,
     scenarioStatus: "active",
-    campName: scenarioId === "sandbox" ? "Camp Overwatch" : scenario.name,
+    campName: scenarioId === "sandbox" ? "Sentinel Base" : scenario.name,
     totalMinutes: 6 * 60,
     speed: 1,
     previousSpeed: 1,
@@ -61,6 +91,7 @@ export function createGame(scenarioId: string, seedOverride?: number): GameState
     nextThreatAt: 11 * 60,
     nextFalseAlarmAt: 9 * 60,
     lastDailyUpdate: 0,
+    lastWeeklyFundingUpdate: 0,
     lastMonthlyUpdate: 0,
     lastAutosaveMonth: -1,
     world: createWorld(seed),
@@ -74,20 +105,22 @@ export function createGame(scenarioId: string, seedOverride?: number): GameState
       campRating: 0, securityEffectiveness: 0, peopleWellbeing: 0, costEffectiveness: 0, readiness: 0,
       scheduleConfidence: 0, coverage: 0, uptime: 0, trooperHappiness: 0, operatorHappiness: 0,
       capabilityPoints: 0, capabilityLevel: "Fragile", caught: 0, escaped: 0, alarmsResolved: 0, falseAlarms: 0,
+      securityHealth: 0, cognitiveLoad: 0, detectionFusion: 0, responseReadiness: 0,
     },
+    automation: { lifecycleAutopilot: true, incidentResponse: true },
     tutorial: { procured: false, integrated: false, tested: false, deployed: false, commissioned: false, hired: false, resolvedAlarm: false, dismissed: false },
     messages: [],
   };
 
-  postLedger(state, "funding", "Initial command appropriation", scenario.startCash);
+  postLedger(state, "funding", "Initial command appropriation", 20_000_000);
   for (let shift = 0; shift < 3; shift += 1) {
     state.staff.push(createStaff(state, "trooper", shift as 0 | 1 | 2));
     state.staff.push(createStaff(state, "operator", shift as 0 | 1 | 2));
   }
   state.staff.push(createStaff(state, "engineer", 1));
   if (scenarioId === "alarm-fatigue") state.staff.filter((member) => member.role === "operator").forEach((member) => { member.happiness = 46; });
-  state.devices.push(createLegacyDevice(state, 27, 19, 1), createLegacyDevice(state, 73, 19, 2));
-  state.messages.push({ id: nextId(state, "message"), minute: state.totalMinutes, title: "Command handover", text: "Legacy cameras are online. Review the weak sectors and deliver your first assured capability.", tone: "info" });
+  installBaselineSecurity(state);
+  state.messages.push({ id: nextId(state, "message"), minute: state.totalMinutes, title: "Command handover", text: "Eight intrusion-analytics cameras and twelve floodlights are operational. Expand the baseline into a resilient, fused capability.", tone: "info" });
   recalculateRating(state);
   return state;
 }

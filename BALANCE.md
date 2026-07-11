@@ -1,8 +1,38 @@
-# Camp Overwatch balance reference
+# Sentinel Base balance reference
 
 This file records the tuning implemented in the current vertical slice. It is descriptive, not aspirational: values under **Current** are read from the TypeScript source. Items under **Roadmap** are proposed balance work and do not affect the build.
 
 All money values are game dollars. Percentages shown as “+6 pp” are additive percentage points; multipliers such as “x1.08” are multiplicative.
+
+## Sentinel Base v2 current overrides
+
+This section supersedes older v1 references below where they differ. It documents the shipped Sentinel Base posture and economy.
+
+### Starting posture and feasibility
+
+Every scenario and Sandbox starts with a $20,000,000 command appropriation, three troopers, three operators, one engineer, eight operational Sentry Fixed Cameras equipped with Intrusion VA, and twelve operational Lumen Security Floodlights. The cameras cover the eight fixed ingress sectors and the lights cover the four perimeter sides.
+
+The baseline costs $160,248 per month to sustain: $145,000 payroll plus $15,248 operational support. A representative full perimeter enhancement remains easily feasible from the opening appropriation: 24 additional Fixed Cameras with Intrusion VA ($1,752,000 whole-programme), 32 Floodlights ($720,000), and four standard LiDARs ($616,000), for a $3,088,000 delivered-capability commitment before optional upgrades. This leaves more than $16.9m before recurring spend.
+
+### Weekly command funding
+
+Funding is released every seven in-game days, before monthly payroll and O&S. It is intentionally uncapped:
+
+```text
+weekly funding = max($2,000,000,
+                     round_to_nearest_$100(
+                       $2,000,000
+                       + $20,000 * security health
+                       + $500 * capability points))
+```
+
+There is no monthly allocation in Sentinel Base. Monthly close continues to post payroll, device O&S, savings, and autosave.
+
+### Automation, C2, and score
+
+Delivery Autopilot progresses ready ICD integration, factory acceptance, and site acceptance gates when staff and funding permit. The player only chooses deployment locations. C2 validates alarms and dispatches available troopers, robots, or drones automatically. The player changes future outcomes through coverage, fused evidence, staffing, workload, and mobile capability.
+
+Security Health is the displayed base rating. It combines operational security, response readiness, trooper and operator happiness, cost effectiveness, uptime, fused detection, and cognitive load. Capability points are awarded daily and on successful responses. At the hardened-perimeter threshold, fully operational high-quality coverage guarantees detection and successful interception; it provides an explicit end-state rather than an endless dice roll.
 
 ## 1. Clock, calendar, and simulation
 
@@ -25,10 +55,10 @@ The UI frame delta is capped at 0.25 seconds before entering the fixed-step accu
 
 | Scenario | Cash | Deadline | Threat multiplier | False-alarm multiplier | Seed |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| First Watch | $1,250,000 | Day 30 | 0.72 | 0.80 | 19,881 |
-| Monsoon Line | $1,600,000 | Day 45 | 1.00 | 1.15 | 92,247 |
-| Noise Floor | $1,950,000 | Day 60 | 1.35 | 1.80 | 410,731 |
-| Open Command (Sandbox) | $1,800,000 | None | 0.90 | 1.00 | 73,221 |
+| First Watch | $20,000,000 | Day 30 | 0.72 | 0.80 | 19,881 |
+| Monsoon Line | $20,000,000 | Day 45 | 1.00 | 1.15 | 92,247 |
+| Noise Floor | $20,000,000 | Day 60 | 1.35 | 1.80 | 410,731 |
+| Open Command (Sandbox) | $20,000,000 | None | 0.90 | 1.00 | 73,221 |
 
 ### Objectives
 
@@ -58,8 +88,8 @@ Every mode starts with:
 
 - one trooper and one operator on each of the three shifts;
 - one engineer on Shift 1 (08:00-16:00);
-- two operational Sentry Fixed Cameras at sectors 27.19 and 73.19;
-- each legacy camera has Intrusion VA, 82% health, faces north, and has a notional commission date 120 days before the game;
+- eight operational Sentry Fixed Cameras at the fixed ingress sectors, each with Intrusion VA, 100% health, and an inward-facing orientation;
+- twelve operational Lumen Security Floodlights distributed around the fenceline;
 - initial weather equal to the first scenario weather entry, intensity 0.20, 28 C;
 - first weather change at 11:00, first threat due at 11:00, first nuisance alarm due at 09:00.
 
@@ -387,10 +417,10 @@ interdiction = caught / (caught + escaped) * 100
 alarm quality = 100 - falseAlarms / (alarmsResolved + falseAlarms) * 60
                 or 52 before the first resolved/dismissed alarm
 
-security = coverage * 0.32
+security = detection fusion * 0.42
          + interdiction * 0.26
-         + uptime * 0.22
-         + alarm quality * 0.20
+         + uptime * 0.20
+         + alarm quality * 0.12
 ```
 
 ### People and cost
@@ -426,25 +456,26 @@ schedule confidence = clamp(55 + readiness * 0.30 - open orders * 1.5)
 
 Schedule confidence becomes 100 after a scenario is no longer active. It is diagnostic and has no direct weight in the current camp rating.
 
-### Camp rating
+### Security Health
 
 ```text
-savings score = clamp(50 + savingsLift * 2)
+Security Health = security * 0.30
+                + response readiness * 0.23
+                + people * 0.14
+                + cost effectiveness * 0.13
+                + uptime * 0.10
+                + detection fusion * 0.10
+                - cognitive workload * 0.08
 
-raw camp rating = security * 0.50
-                + people * 0.20
-                + cost effectiveness * 0.20
-                + savings score * 0.10
-
-camp rating <= security + 20
-camp rating <= 39 if there are no troopers or no operators
-camp rating <= 49 if coverage < 20
+Security Health <= security + 24
+Security Health <= 39 if there are no troopers or no operators
+Security Health <= 49 if detection fusion < 20
 ```
 
 Daily point award:
 
 ```text
-round(camp rating * camp rating / 100)
+round(Security Health * Security Health / 100)
 ```
 
 ### Capability tiers
@@ -460,7 +491,7 @@ round(camp rating * camp rating / 100)
 
 The highest tier for which both gates are met is displayed.
 
-## 14. Monthly economy
+## 14. Recurring economy and weekly command funding
 
 ### Payroll and operations
 
@@ -482,22 +513,20 @@ monthly verified savings = max(0, $275,000 - recurring burn)
 
 Verified savings accumulate as a non-cash performance metric. They are not posted as a positive ledger transaction.
 
-### Command allocation
+### Weekly command funding
 
 ```text
-objectiveProgress = min(1, camp rating / 75)
-lossPenalty = min(0.25, stolen losses / 800,000)
-
-factor = clamp(
-  0.70 + camp rating * 0.006 + objectiveProgress * 0.15 - lossPenalty,
-  0.65,
-  1.45
+weekly funding = max(
+  $2,000,000,
+  round_to_nearest_$100(
+    $2,000,000
+    + $20,000 * security health
+    + $500 * capability points
+  )
 )
-
-allocation = round_to_nearest_$100($150,000 * factor)
 ```
 
-The possible normal allocation range is $97,500-$217,500. Funding is posted before payroll and O&S at close.
+Funding is uncapped and posts every seven in-game days. Payroll and O&S remain monthly close entries.
 
 If cash is negative after those entries:
 
@@ -529,7 +558,7 @@ capability points -= 250, floor 0
 1. Exclude non-evidence assets such as floodlights from the operator analytics bonus.
 2. Make configured drone night factors affect runtime detection instead of using the shared non-camera factor.
 3. Run deterministic completion scripts for all scenario seeds and adjust only documented values.
-4. Verify that points and monthly funding do not create an unrecoverable early spiral or effortless late-game surplus.
+4. Verify that points and weekly funding do not create an unrecoverable early spiral or effortless late-game surplus.
 5. Profile 4x and a three-year headless run before increasing entity caps.
 
 ### Roadmap, not implemented

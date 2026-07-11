@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MINUTES_PER_MONTH } from "../src/core/time";
+import { MINUTES_PER_DAY, MINUTES_PER_MONTH } from "../src/core/time";
 import {
   commissionDevice,
   dispatchIncident,
@@ -47,6 +47,7 @@ function buildScriptedCamp(): GameState {
   state.nextThreatAt = NEVER;
   state.nextFalseAlarmAt = NEVER;
   state.weather.nextChangeAt = NEVER;
+  state.automation.lifecycleAutopilot = false;
 
   for (const asset of SCRIPTED_CAPABILITY) expect(procureDevice(state, asset.modelId, asset.upgradeIds).ok).toBe(true);
   expect(state.orders).toHaveLength(SCRIPTED_CAPABILITY.length);
@@ -124,9 +125,9 @@ describe("headless long-run simulation", () => {
     let previousMonth = Math.floor(state.totalMinutes / MINUTES_PER_MONTH);
 
     while (state.totalMinutes < target) {
-      // Three-hour chunks preserve verification/dispatch/response transitions while
-      // keeping a three-year CI run practical.
-      const delta = Math.min(180, target - state.totalMinutes);
+      // Daily headless steps exercise all calendar closes over three full years
+      // without paying the browser loop's fine-grained rendering cadence in CI.
+      const delta = Math.min(MINUTES_PER_DAY, target - state.totalMinutes);
       const update = advanceSimulation(state, delta);
       expect(update.scenarioEnded).toBeNull();
 

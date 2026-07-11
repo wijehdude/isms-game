@@ -1,10 +1,10 @@
-# Parkwright: Camp Overwatch
+# Sentinel Base
 
 ## Game design and delivery brief
 
-**Product title:** Camp Overwatch
+**Product title:** Sentinel Base
 
-**Project codename:** Parkwright
+**Project codename:** Sentinel Base
 
 **Genre:** Single-player camp-security capability management simulation
 
@@ -15,9 +15,23 @@
 
 ### Scope normalization
 
-The original brief combines a theme-park template with a camp-security game. This document makes the product boundary explicit: Camp Overwatch is about designing, delivering, and operating an integrated physical-security capability. Coasters, rides, guests, park paths, and EIN ratings are not part of this product. References to them in the source brief are superseded by the capability lifecycle, workforce, incidents, and camp-security score specified here.
+The original brief combines a theme-park template with a camp-security game. This document makes the product boundary explicit: Sentinel Base is about designing, delivering, and operating an integrated physical-security capability. Coasters, rides, guests, park paths, and EIN ratings are not part of this product. References to them in the source brief are superseded by the capability lifecycle, workforce, incidents, and camp-security score specified here.
 
 The current repository is a polished, playable **vertical slice** of that design. Sections marked **Current** describe behavior present in the build. Sections marked **Roadmap** define the intended expansion and are not acceptance claims for the current build.
+
+---
+
+## Sentinel Base v2 operating model
+
+The current release is named **Sentinel Base**. It starts every scenario with a credible inherited posture: $20,000,000 in command funds, eight operational fixed cameras carrying Intrusion VA, twelve perimeter floodlights, a trooper and operator on each shift, and one engineer. Players expand this baseline rather than constructing security from nothing.
+
+The game is deliberately not an approval simulator. Capability Builder supports procurement batches of 1-99 identical assets and prices both unit and batch lifecycle cost before commitment. Delivery Autopilot advances ready ICD integration, factory acceptance, and site acceptance when personnel and funds are available; **Approve all ready** is retained as a single catch-up command. Deployment location, camera orientation, configuration, and force mix remain player decisions.
+
+C2 is autonomous. Operators verify alarms and dispatch available troopers, robots, or drones, while the player changes outcomes indirectly by improving evidence quality, reducing false alarms, adding coverage, sustaining people, and fielding mobile capability. The C2 view is therefore an operational record, not a button-click queue.
+
+Security Health is the visible command rating. It is driven by operational security, response readiness, troop and operator happiness, lifecycle cost effectiveness and savings, asset uptime, fused evidence, and a cognitive-workload penalty. Capability points build over time from proven performance. Every seven in-game days command injects at least $2m, with uncapped upside based on Security Health and capability points. At the hardened-perimeter thresholds (85 Health, 8,000 points, 70% coverage, 85% fusion, 85% response readiness, and 90% uptime), intruders are deterministically detected and intercepted.
+
+First launch offers a five-step walkthrough that can be skipped, suppressed, or replayed from Save & Settings. Camera zoom ranges from 0.20x to 2.25x with pointer-centred wheel zoom and a Fit Perimeter command. The renderer culls off-screen tiles and entities, uses a low-zoom terrain cache, and caps canvas resolution scaling to preserve smooth play.
 
 ---
 
@@ -41,19 +55,19 @@ The player is both capability manager and camp-security lead. Buying an impressi
 
 1. Inspect blind sectors, weather, workforce load, current projects, and command objectives.
 2. Configure a sensor or mobile asset and review its whole-programme price.
-3. Procure it, approve the ICD/C2 integration, and run factory acceptance.
-4. Deploy the tested asset on a valid tile and pass site acceptance.
-5. Monitor alarms, validate evidence, and dispatch a trooper or mobile responder.
+3. Procure it as a single asset or batch; Delivery Autopilot handles ICD/C2 integration and factory acceptance.
+4. Deploy the tested asset on a valid tile; Delivery Autopilot completes site acceptance.
+5. Monitor autonomous C2 outcomes while operators validate evidence and dispatch a trooper or mobile responder.
 6. Sustain the workforce and equipment while balancing payroll and O&S.
 7. Improve security effectiveness, happiness, cost-effectiveness, savings, rating, and lifetime capability points.
-8. Earn stronger command allocations, close remaining risks, and repeat under greater pressure.
+8. Earn uncapped weekly command funding, close remaining risks, and repeat under greater pressure.
 
 ### 1.4 Session shape
 
 - Real-time deterministic simulation with pause, 1x, 2x, and 4x speeds.
 - One game day lasts about 45 real seconds at 1x.
 - Three eight-hour shifts cover the day.
-- A month contains 30 days and closes payroll, O&S, savings, funding, and an autosave.
+- A week releases a minimum $2m command injection; a month closes payroll, O&S, savings, and an autosave.
 - Scenarios last 30-60 in-game days; Sandbox has no deadline or score ceiling.
 
 ---
@@ -66,15 +80,15 @@ Scenarios provide fixed seeds, budgets, weather distributions, threat pressure, 
 
 | Scenario | Difficulty | Start cash | Deadline | Command objective |
 | --- | --- | ---: | ---: | --- |
-| First Watch | Training | $1,250,000 | Day 30 | Rating 60, coverage 42%, trooper happiness 58, operator happiness 58 |
-| Monsoon Line | Standard | $1,600,000 | Day 45 | Rating 68, catch 6 intruders, retain $250,000 |
-| Noise Floor | Hard | $1,950,000 | Day 60 | Rating 72, operator happiness 68, catch 10 intruders |
+| First Watch | Training | $20,000,000 | Day 30 | Rating 60, coverage 42%, trooper happiness 58, operator happiness 58 |
+| Monsoon Line | Standard | $20,000,000 | Day 45 | Rating 68, catch 6 intruders, retain $250,000 |
+| Noise Floor | Hard | $20,000,000 | Day 60 | Rating 72, operator happiness 68, catch 10 intruders |
 
-All scenarios begin at 06:00 with a basic three-shift team, one engineer, and two legacy fence cameras. Noise Floor begins with reduced operator happiness.
+All scenarios begin at 06:00 with a basic three-shift team, one engineer, eight operational Intrusion VA cameras, and twelve operational floodlights. Noise Floor begins with reduced operator happiness.
 
 ### 2.2 Sandbox — Current
 
-Open Command starts with $1,800,000, has no deadline, and never declares a final victory. Threat pressure rises gradually by month. Monthly command funding reacts to delivered capability, while lifetime points and capability tiers provide the long-term score chase.
+Open Command starts with $20,000,000, has no deadline, and never declares a final victory. Threat pressure rises gradually by month. Weekly command funding reacts to delivered capability, while lifetime points and capability tiers provide the long-term score chase.
 
 ### 2.3 Scenario framework — Roadmap
 
@@ -384,10 +398,10 @@ alarmQuality = 100 - falseAlarms / (resolvedAlarms + falseAlarms) * 60,
                or 52 before any outcome
 
 securityEffectiveness =
-    coverage * 0.32
+    detectionFusion * 0.42
   + interdiction * 0.26
-  + uptime * 0.22
-  + alarmQuality * 0.20
+  + uptime * 0.20
+  + alarmQuality * 0.12
 
 peopleWellbeing = trooperHappiness * 0.55 + operatorHappiness * 0.45
 
@@ -398,28 +412,30 @@ costEffectiveness = clamp(52 + savingsLift - lossDrag,
                           min(100, securityEffectiveness + 15))
 ```
 
-Readiness combines 65% accepted-asset readiness and 35% staff readiness. Within staff readiness, three troopers supply 50%, three operators 35%, and one engineer 15%. Schedule confidence starts at 55, gains 30% of readiness, and loses 1.5 points per open order. Readiness and schedule confidence are diagnostic metrics, not direct camp-rating weights in the current formula.
+Readiness combines 65% accepted-asset readiness and 35% staff readiness. Within staff readiness, three troopers supply 50%, three operators 35%, and one engineer 15%. Schedule confidence starts at 55, gains 30% of readiness, and loses 1.5 points per open order. Cognitive workload rises with active incidents, manual feeds, and false-alarm rate; analytics and adequate operators reduce it. Response readiness combines operator presence, available troopers or mobile systems, happiness, fatigue, and cognitive workload.
 
 ### 10.3 Camp rating — Current
 
 ```text
-rawRating = securityEffectiveness * 0.50
-          + peopleWellbeing      * 0.20
-          + costEffectiveness    * 0.20
-          + savingsScore         * 0.10
+securityHealth = securityEffectiveness * 0.30
+               + responseReadiness      * 0.23
+               + peopleWellbeing        * 0.14
+               + costEffectiveness      * 0.13
+               + uptime                 * 0.10
+               + detectionFusion        * 0.10
+               - cognitiveLoad          * 0.08
 
-savingsScore = clamp(50 + savingsLift * 2)
-campRating = min(rawRating, securityEffectiveness + 20)
+campRating = min(securityHealth, securityEffectiveness + 24)
 ```
 
 Two hard safeguards prevent economic optimization from masquerading as security:
 
 - no troopers or no operators caps rating at 39;
-- coverage below 20 caps rating at 49.
+- detection fusion below 20 caps rating at 49.
 
 ### 10.4 Lifetime points and levels — Current
 
-Each daily close awards `round(campRating^2 / 100)`, so sustained excellence grows the score much faster than a minimally viable camp. Incident outcomes add or remove points:
+Each daily close awards `round(securityHealth^2 / 100)`, so sustained excellence grows the score much faster than a minimally viable camp. Incident outcomes add or remove points:
 
 - genuine incident resolved: +350;
 - benign field resolution: +80;

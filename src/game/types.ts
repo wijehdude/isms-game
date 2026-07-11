@@ -95,6 +95,8 @@ export type ProcurementOrder = {
   orderedAt: number;
   readyAt: number;
   quotedCost: number;
+  /** Shared identifier for units placed in the same bulk purchase. */
+  batchId?: string;
 };
 
 export type Device = {
@@ -167,6 +169,8 @@ export type Incident = {
   readyAt: number;
   assignedResponderId: string | null;
   resolution: string | null;
+  /** Set when a fully hardened perimeter supplies assured evidence and response. */
+  assuredResponse?: boolean;
 };
 
 export type LedgerEntry = {
@@ -204,6 +208,21 @@ export type RatingState = {
   escaped: number;
   alarmsResolved: number;
   falseAlarms: number;
+  /** Overall command-facing measure used by funding and progression. */
+  securityHealth: number;
+  /** Operator workload pressure; lower is better. */
+  cognitiveLoad: number;
+  /** Quality of overlapping and complementary sensor evidence. */
+  detectionFusion: number;
+  /** Ability to validate and respond with the current shift. */
+  responseReadiness: number;
+};
+
+export type AutomationState = {
+  /** Automatically approves ICD, FAT and SAT gates when funds permit. */
+  lifecycleAutopilot: boolean;
+  /** Lets C2 validate alarms and dispatch available responders. */
+  incidentResponse: boolean;
 };
 
 export type WeatherState = {
@@ -257,7 +276,7 @@ export type GameMessage = {
 };
 
 export type GameState = {
-  version: 1;
+  version: 2;
   idCounter: number;
   seed: number;
   rngState: number;
@@ -271,6 +290,7 @@ export type GameState = {
   nextThreatAt: number;
   nextFalseAlarmAt: number;
   lastDailyUpdate: number;
+  lastWeeklyFundingUpdate: number;
   lastMonthlyUpdate: number;
   lastAutosaveMonth: number;
   world: WorldState;
@@ -281,6 +301,7 @@ export type GameState = {
   incidents: Incident[];
   economy: EconomyState;
   rating: RatingState;
+  automation: AutomationState;
   tutorial: TutorialState;
   messages: GameMessage[];
 };

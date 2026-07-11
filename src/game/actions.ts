@@ -11,21 +11,28 @@ export function pushMessage(state: GameState, title: string, text: string, tone:
   state.messages = state.messages.slice(0, 80);
 }
 
-export function procureDevice(state: GameState, modelId: string, upgradeIds: string[]): ActionResult {
+export function procureDevice(state: GameState, modelId: string, upgradeIds: string[], quantity = 1): ActionResult {
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+    return { ok: false, reason: "Procurement quantity must be a whole number from 1 to 99." };
+  }
   const model = getModel(modelId);
   const uniqueUpgrades = [...new Set(upgradeIds)];
   const invalid = uniqueUpgrades.find((id) => !getUpgrade(id).kinds.includes(model.kind));
   if (invalid) return { ok: false, reason: `${getUpgrade(invalid).name} is not compatible with ${model.shortName}.` };
   const stats = configuredStats(modelId, uniqueUpgrades);
-  if (!canAfford(state, stats.purchaseCost)) return { ok: false, reason: `Requires ${formatMoney(stats.purchaseCost)}; only ${formatMoney(state.economy.cash)} is available.` };
-  spend(state, "procurement", `Purchase order · ${model.name}`, stats.purchaseCost);
-  state.orders.push({
-    id: nextId(state, "order"), modelId, upgradeIds: uniqueUpgrades, stage: "procurement", orderedAt: state.totalMinutes,
-    readyAt: state.totalMinutes + model.leadHours * 60, quotedCost: stats.totalProgrammeCost,
-  });
+  const purchaseCost = stats.purchaseCost * quantity;
+  if (!canAfford(state, purchaseCost)) return { ok: false, reason: `Requires ${formatMoney(purchaseCost)}; only ${formatMoney(state.economy.cash)} is available.` };
+  spend(state, "procurement", `Purchase order · ${quantity}× ${model.name}`, purchaseCost);
+  const batchId = quantity > 1 ? nextId(state, "batch") : undefined;
+  for (let unit = 0; unit < quantity; unit += 1) {
+    state.orders.push({
+      id: nextId(state, "order"), modelId, upgradeIds: uniqueUpgrades, stage: "procurement", orderedAt: state.totalMinutes,
+      readyAt: state.totalMinutes + model.leadHours * 60, quotedCost: stats.totalProgrammeCost, batchId,
+    });
+  }
   state.tutorial.procured = true;
-  pushMessage(state, "Purchase order placed", `${model.name} is due in ${model.leadHours} hours. ${formatMoney(stats.totalProgrammeCost)} total programme cost.`, "good");
-  return { ok: true, message: `${model.shortName} ordered.` };
+  pushMessage(state, "Purchase order placed", `${quantity}× ${model.name} ${quantity === 1 ? "is" : "are"} due in ${model.leadHours} hours. ${formatMoney(stats.totalProgrammeCost * quantity)} total programme cost.`, "good");
+  return { ok: true, message: quantity === 1 ? `${model.shortName} ordered.` : `${quantity} ${model.shortName} units ordered.` };
 }
 
 export function startIntegration(state: GameState, orderId: string): ActionResult {
@@ -55,6 +62,26 @@ export function startFactoryTest(state: GameState, orderId: string): ActionResul
   state.tutorial.tested = true;
   pushMessage(state, "Factory test running", `Alarm mapping, health, recovery and configured analytics are under test.`, "info");
   return { ok: true, message: "Factory acceptance test started." };
+}
+
+/** Approve every currently actionable programme gate, including installed assets awaiting SAT. */
+export function approveAllReady(state: GameState): ActionResult {
+  let approved = 0;
+  for (const order of [...state.orders]) {
+    const result = order.stage === "integration-review"
+      ? startIntegration(state, order.id)
+      : order.stage === "factory-test"
+        ? startFactoryTest(state, order.id)
+        : null;
+    if (result?.ok) approved += 1;
+  }
+  for (const device of state.devices) {
+    if (device.status === "awaiting-sat" && commissionDevice(state, device.id).ok) approved += 1;
+  }
+  return {
+    ok: true,
+    message: approved === 0 ? "No programme approvals are ready." : `${approved} programme gate${approved === 1 ? "" : "s"} approved.`,
+  };
 }
 
 export function validatePlacement(state: GameState, orderId: string, x: number, y: number): ActionResult {
@@ -94,8 +121,9 @@ export function placeOrder(state: GameState, orderId: string, x: number, y: numb
   state.orders.splice(index, 1);
   state.tutorial.deployed = true;
   pushMessage(state, "Installation complete", `${device.name} is mounted at sector ${x}.${y}. Run site acceptance to make it operational.`, "good");
+  const sat = state.automation.lifecycleAutopilot ? commissionDevice(state, device.id) : null;
   recalculateRating(state);
-  return { ok: true, message: `${device.name} installed; SAT is required.` };
+  return { ok: true, message: sat?.ok ? `${device.name} installed; SAT started automatically.` : `${device.name} installed; SAT is required.` };
 }
 
 export function commissionDevice(state: GameState, deviceId: string): ActionResult {
@@ -132,7 +160,7 @@ export function verifyIncident(state: GameState, incidentId: string): ActionResu
   const operators = onDutyStaff(state, "operator");
   if (operators.length === 0) return { ok: false, reason: "No operator is on duty to validate the evidence." };
   incident.status = "verifying";
-  incident.readyAt = state.totalMinutes + Math.max(12, 55 - operators.length * 8);
+  incident.readyAt = state.totalMinutes + Math.max(12, 55 - operators.length * 8 + state.rating.cognitiveLoad * 0.35);
   return { ok: true, message: "Operator is validating the alarm." };
 }
 

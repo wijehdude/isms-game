@@ -1,6 +1,6 @@
 import type { GameState } from "../game/types";
 
-const SAVE_KEY = "parkwright.camp-overwatch.saves.v1";
+const SAVE_KEY = "sentinel-base.saves.v2";
 
 export type SaveSlot = {
   id: "autosave" | "manual";
@@ -16,7 +16,7 @@ export function serializeState(state: GameState): string {
 
 export function deserializeState(serialized: string): GameState {
   const parsed: unknown = JSON.parse(serialized);
-  if (!isGameState(parsed)) throw new Error("This file is not a supported Camp Overwatch save.");
+  if (!isGameState(parsed)) throw new Error("This file is not a supported Sentinel Base v2 save.");
   return parsed;
 }
 
@@ -28,14 +28,19 @@ function isGameState(value: unknown): value is GameState {
   const world = asRecord(record.world);
   const weather = asRecord(record.weather);
   const tutorial = asRecord(record.tutorial);
-  return record.version === 1
+  const automation = asRecord(record.automation);
+  return record.version === 2
     && typeof record.campName === "string"
     && typeof record.scenarioId === "string"
     && typeof record.totalMinutes === "number" && Number.isFinite(record.totalMinutes)
     && (record.speed === 0 || record.speed === 1 || record.speed === 2 || record.speed === 4)
     && typeof record.rngState === "number" && typeof record.idCounter === "number"
+    && typeof record.lastWeeklyFundingUpdate === "number" && Number.isFinite(record.lastWeeklyFundingUpdate)
     && economy !== null && typeof economy.cash === "number" && Array.isArray(economy.ledger)
     && rating !== null && typeof rating.campRating === "number" && typeof rating.capabilityPoints === "number"
+    && typeof rating.securityHealth === "number" && typeof rating.cognitiveLoad === "number"
+    && typeof rating.detectionFusion === "number" && typeof rating.responseReadiness === "number"
+    && automation !== null && typeof automation.lifecycleAutopilot === "boolean" && typeof automation.incidentResponse === "boolean"
     && world !== null && typeof world.width === "number" && typeof world.height === "number"
     && Array.isArray(world.tiles) && Array.isArray(world.paths) && Array.isArray(world.structures)
     && weather !== null && typeof weather.kind === "string" && typeof weather.nextChangeAt === "number"

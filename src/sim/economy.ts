@@ -1,6 +1,8 @@
 import { configuredStats } from "../game/catalog";
 import type { GameState, LedgerEntry } from "../game/types";
 
+export const MINUTES_PER_WEEK = 7 * 24 * 60;
+
 export function postLedger(
   state: GameState,
   category: LedgerEntry["category"],
@@ -47,18 +49,23 @@ export function projectedMonthlyCosts(state: GameState): { payroll: number; oper
   return { payroll: Math.round(payroll), operations: Math.round(operations), total: Math.round(payroll + operations) };
 }
 
+export function weeklyFundingAmount(state: GameState): number {
+  const rawFunding = 2_000_000 + 20_000 * state.rating.securityHealth + 500 * state.rating.capabilityPoints;
+  return Math.max(2_000_000, Math.round(rawFunding / 100) * 100);
+}
+
+export function closeWeek(state: GameState): number {
+  const funding = weeklyFundingAmount(state);
+  postLedger(state, "funding", `Weekly command funding · security health ${state.rating.securityHealth}`, funding);
+  return funding;
+}
+
 export function closeMonth(state: GameState): void {
   const costs = projectedMonthlyCosts(state);
   const baselineConventionalCost = 275_000;
   const savings = Math.max(0, baselineConventionalCost - costs.total);
   state.economy.realisedSavings += savings;
 
-  const objectiveProgress = Math.min(1, state.rating.campRating / 75);
-  const lossPenalty = Math.min(0.25, state.economy.stolenLosses / 800_000);
-  const targetAllocation = 150_000 * Math.max(0.65, Math.min(1.45, 0.7 + state.rating.campRating * 0.006 + objectiveProgress * 0.15 - lossPenalty));
-  const allocation = Math.round(targetAllocation / 100) * 100;
-
-  postLedger(state, "funding", `Monthly command allocation · capability ${state.rating.campRating}`, allocation);
   if (costs.payroll > 0) postLedger(state, "payroll", "Monthly workforce payroll", -costs.payroll);
   if (costs.operations > 0) postLedger(state, "operations", "Device licences, energy and preventive maintenance", -costs.operations);
 
