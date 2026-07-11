@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Opening Camp Overwatch…</title>
+    <style>
+      html { color-scheme: dark; font-family: system-ui, sans-serif; background: #10271e; color: #f3edda; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; }
+      main { max-width: 34rem; padding: 2rem; text-align: center; }
+      strong { color: #63d8ad; }
+    </style>
+  </head>
+  <body>
+    <main><strong>Camp Overwatch C2 Tycoon</strong><p>Retiring the legacy Sensor-mon cache…</p></main>
+    <script>
+      (async () => {
+        try {
+          if ("serviceWorker" in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registrations.map((registration) => registration.unregister()));
+          }
+          if ("caches" in window) {
+            const cacheNames = await caches.keys();
+            await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+          }
+        } finally {
+          window.location.replace("/?release=camp-overwatch-2026-07");
+        }
+      })();
+    </script>
+  </body>
+</html>

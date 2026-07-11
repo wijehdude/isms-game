@@ -5,7 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Design, integrate and operate a resilient camp security system in this isometric management simulation." />
     <meta name="theme-color" content="#12231c" />
+    <meta name="application-name" content="Camp Overwatch C2 Tycoon" />
     <title>Parkwright: Camp Overwatch</title>
+    <script>
+      (() => {
+        const release = "camp-overwatch-rebuild-2026-07";
+        document.documentElement.dataset.release = release;
+
+        window.addEventListener("load", async () => {
+          let wasControlled = false;
+          let registrationCount = 0;
+
+          try {
+            if ("serviceWorker" in navigator) {
+              wasControlled = Boolean(navigator.serviceWorker.controller);
+              const registrations = await navigator.serviceWorker.getRegistrations();
+              registrationCount = registrations.length;
+              await Promise.all(registrations.map((registration) => registration.unregister()));
+            }
+
+            if ("caches" in window) {
+              const cacheNames = await caches.keys();
+              await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+            }
+          } catch (error) {
+            console.warn("Legacy app-cache cleanup could not complete.", error);
+          }
+
+          const reloadKey = `${release}.legacy-cache-reload`;
+          if ((wasControlled || registrationCount > 0) && sessionStorage.getItem(reloadKey) !== "done") {
+            sessionStorage.setItem(reloadKey, "done");
+            window.location.reload();
+          }
+        }, { once: true });
+      })();
+    </script>
   </head>
   <body>
     <canvas id="game-canvas" aria-label="Isometric view of Camp Overwatch"></canvas>

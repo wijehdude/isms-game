@@ -161,7 +161,7 @@ export class CampOverwatchApp {
           <div class="brief-stats"><div><span>Legacy coverage</span><strong>18%</strong></div><div><span>Open risks</span><strong>4</strong></div><div><span>Weather</span><strong>Clear</strong></div></div>
         </aside>
       </main>
-      <div class="corner-build">BUILD 1.0 · LOCAL SAVE</div>`;
+      <div class="corner-build">CAMP OVERWATCH TYCOON · REBUILD 2026.07</div>`;
   }
 
   private renderScenarios(): void {
