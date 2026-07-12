@@ -15,6 +15,14 @@ export const HARDENED_PERIMETER_THRESHOLDS = {
   uptime: 90,
 } as const;
 
+/**
+ * Early scorecards should reward the capability the commander has actually
+ * fielded, without pretending that no incidents means a perfect history. Once
+ * ten genuine incidents have occurred, every operational measure is wholly
+ * evidence-led.
+ */
+const OBSERVATION_WINDOW = 10;
+
 export function isHardenedPerimeter(state: GameState): boolean {
   const threshold = HARDENED_PERIMETER_THRESHOLDS;
   return state.rating.securityHealth >= threshold.securityHealth
@@ -145,6 +153,119 @@ type Evidence = {
   threatsPrevented: number;
 };
 
+type CapabilityForecast = {
+  incidentDetectionRate: number;
+  falseAlarmRate: number;
+  detectionSpeed: number;
+  responseSpeed: number;
+  meanTimeToDetect: number;
+  meanTimeToRespond: number;
+  successfulIncidentClosures: number;
+  preventionRate: number;
+  missedIntrusionScore: number;
+};
+
+function observationWeight(realIncidents: number): number {
+  return clamp(realIncidents / OBSERVATION_WINDOW, 0, 1);
+}
+
+function blendForecast(forecast: number, observed: number, realIncidents: number): number {
+  const observedWeight = observationWeight(realIncidents);
+  return clamp(forecast * (1 - observedWeight) + observed * observedWeight);
+}
+
+function blendValue(forecast: number, observed: number, realIncidents: number): number {
+  const observedWeight = observationWeight(realIncidents);
+  return Math.max(0, forecast * (1 - observedWeight) + observed * observedWeight);
+}
+
+/**
+ * A short operational record is too noisy to be the whole programme score.
+ * This forecast is intentionally grounded in the installed estate, current
+ * shift capacity and affordability rather than a generic neutral default.
+ */
+function capabilityForecast(
+  state: GameState,
+  coverage: number,
+  detectionFusion: number,
+  uptime: number,
+  responseReadiness: number,
+  cognitiveLoad: number,
+  cashRunway: number,
+): CapabilityForecast {
+  const hour = Math.floor(state.totalMinutes / 60) % 24;
+  const shift = hour < 8 ? 0 : hour < 16 ? 1 : 2;
+  const activeOperators = state.staff.filter((member) => member.role === "operator" && member.shift === shift).length;
+  const activeTroopers = state.staff.filter((member) => member.role === "trooper" && member.shift === shift).length;
+  const engineers = state.staff.filter((member) => member.role === "engineer").length;
+  const staffing = clamp(
+    Math.min(1, activeOperators / 2) * 45
+      + Math.min(1, activeTroopers / 2) * 45
+      + Math.min(1, engineers / 2) * 10,
+  );
+  const workloadHeadroom = 100 - cognitiveLoad;
+  const detectionDevices = state.devices.filter((device) => {
+    return device.status === "operational" && getModel(device.modelId).kind !== "lighting";
+  });
+  const cameras = detectionDevices.filter((device) => getModel(device.modelId).kind === "camera");
+  const manualFeeds = cameras.filter((device) => {
+    return getModel(device.modelId).id !== "camera-edge" && !device.upgradeIds.some((id) => id.startsWith("va-"));
+  }).length;
+  const expectedFalseAlarmRate = detectionDevices.length === 0
+    ? 100
+    : clamp(
+      (detectionDevices.reduce((sum, device) => sum + configuredStats(device.modelId, device.upgradeIds).falseAlarmRate, 0) / detectionDevices.length) * 100
+        + (manualFeeds / Math.max(1, cameras.length)) * 9
+        + cognitiveLoad * 0.04,
+    );
+
+  // Detection favours proven perimeter coverage and complementary evidence.
+  // The smaller staffing/workload terms make an unstaffed C2 room visibly less
+  // credible even where hardware happens to overlap.
+  const incidentDetectionRate = clamp(
+    coverage * 0.36
+      + detectionFusion * 0.4
+      + uptime * 0.14
+      + staffing * 0.04
+      + workloadHeadroom * 0.06,
+  );
+  const detectionSpeed = clamp(
+    incidentDetectionRate * 0.72
+      + uptime * 0.12
+      + staffing * 0.08
+      + workloadHeadroom * 0.08,
+  );
+  const responseSpeed = clamp(
+    responseReadiness * 0.7
+      + staffing * 0.16
+      + workloadHeadroom * 0.08
+      + cashRunway * 0.06,
+  );
+  const successfulIncidentClosures = clamp(
+    incidentDetectionRate * 0.48
+      + responseSpeed * 0.38
+      + staffing * 0.07
+      + uptime * 0.07,
+  );
+  const preventionRate = clamp(
+    incidentDetectionRate * 0.58
+      + responseSpeed * 0.27
+      + coverage * 0.1
+      + cashRunway * 0.05,
+  );
+  return {
+    incidentDetectionRate,
+    falseAlarmRate: expectedFalseAlarmRate,
+    detectionSpeed,
+    responseSpeed,
+    meanTimeToDetect: (100 - detectionSpeed) * 0.6,
+    meanTimeToRespond: (100 - responseSpeed) * 0.9,
+    successfulIncidentClosures,
+    preventionRate,
+    missedIntrusionScore: clamp(successfulIncidentClosures * 0.65 + incidentDetectionRate * 0.35),
+  };
+}
+
 /**
  * Metrics are maintained by the simulation. The incident/rating fallbacks make
  * handcrafted test states and a just-upgraded game behave sensibly too.
@@ -179,7 +300,9 @@ function scheduleAdherence(state: GameState): number {
       .filter((order) => order.plannedOperationalAt !== undefined)
       .map((order) => ({ plannedAt: order.plannedOperationalAt ?? state.totalMinutes, actualAt: null })),
   ];
-  if (milestones.length === 0) return 65;
+  // No active programme is on plan. A neutral 65 unfairly capped mature
+  // camps that had completed their last change order successfully.
+  if (milestones.length === 0) return 100;
   const score = milestones.reduce((sum, milestone) => {
     const observedAt = milestone.actualAt ?? state.totalMinutes;
     const delayMinutes = Math.max(0, observedAt - milestone.plannedAt);
@@ -194,20 +317,29 @@ function overallMetricsFor(
   securityHealth: number,
   costEffectiveness: number,
   schedule: number,
+  forecast: CapabilityForecast,
+  cashRunway: number,
 ): OverallMetrics {
   const evidence = evidenceFor(state);
   const real = evidence.realIncidents;
   const alarms = evidence.detectedRealIncidents + evidence.falseAlarmEvents;
-  // No-history values deliberately score neutral, never as a free perfect record.
-  const incidentDetectionRate = real === 0 ? 50 : clamp((evidence.detectedRealIncidents / real) * 100);
-  const falseAlarmRate = alarms === 0 ? 50 : clamp((evidence.falseAlarmEvents / alarms) * 100);
-  const meanTimeToDetect = evidence.detectionSamples === 0 ? 0 : evidence.totalDetectionMinutes / evidence.detectionSamples;
-  const meanTimeToRespond = evidence.responseSamples === 0 ? 0 : evidence.totalResponseMinutes / evidence.responseSamples;
-  const detectionSpeed = evidence.detectionSamples === 0 ? 50 : clamp(100 - (meanTimeToDetect / 60) * 100);
-  const responseSpeed = evidence.responseSamples === 0 ? 50 : clamp(100 - (meanTimeToRespond / 90) * 100);
+  const observedDetectionRate = real === 0 ? forecast.incidentDetectionRate : clamp((evidence.detectedRealIncidents / real) * 100);
+  const observedFalseAlarmRate = alarms === 0 ? forecast.falseAlarmRate : clamp((evidence.falseAlarmEvents / alarms) * 100);
+  const observedMeanTimeToDetect = evidence.detectionSamples === 0 ? forecast.meanTimeToDetect : evidence.totalDetectionMinutes / evidence.detectionSamples;
+  const observedMeanTimeToRespond = evidence.responseSamples === 0 ? forecast.meanTimeToRespond : evidence.totalResponseMinutes / evidence.responseSamples;
+  const meanTimeToDetect = blendValue(forecast.meanTimeToDetect, observedMeanTimeToDetect, real);
+  const meanTimeToRespond = blendValue(forecast.meanTimeToRespond, observedMeanTimeToRespond, real);
+  const observedDetectionSpeed = evidence.detectionSamples === 0 ? forecast.detectionSpeed : clamp(100 - (observedMeanTimeToDetect / 60) * 100);
+  const observedResponseSpeed = evidence.responseSamples === 0 ? forecast.responseSpeed : clamp(100 - (observedMeanTimeToRespond / 90) * 100);
   const closureDenominator = evidence.successfulClosures + evidence.missedIntrusions;
-  const successfulIncidentClosures = closureDenominator === 0 ? 50 : clamp((evidence.successfulClosures / closureDenominator) * 100);
-  const preventionRate = real === 0 ? 50 : clamp((evidence.threatsPrevented / real) * 100);
+  const observedClosures = closureDenominator === 0 ? forecast.successfulIncidentClosures : clamp((evidence.successfulClosures / closureDenominator) * 100);
+  const observedPreventionRate = real === 0 ? forecast.preventionRate : clamp((evidence.threatsPrevented / real) * 100);
+  const incidentDetectionRate = blendForecast(forecast.incidentDetectionRate, observedDetectionRate, real);
+  const falseAlarmRate = blendForecast(forecast.falseAlarmRate, observedFalseAlarmRate, real);
+  const detectionSpeed = blendForecast(forecast.detectionSpeed, observedDetectionSpeed, real);
+  const responseSpeed = blendForecast(forecast.responseSpeed, observedResponseSpeed, real);
+  const successfulIncidentClosures = blendForecast(forecast.successfulIncidentClosures, observedClosures, real);
+  const preventionRate = blendForecast(forecast.preventionRate, observedPreventionRate, real);
   const performance = clamp(
     incidentDetectionRate * 0.26
       + (100 - falseAlarmRate) * 0.14
@@ -216,10 +348,9 @@ function overallMetricsFor(
       + successfulIncidentClosures * 0.2
       + preventionRate * 0.12,
   );
-  const missedIntrusionScore = real === 0 ? 50 : clamp(100 - (evidence.missedIntrusions / real) * 100);
+  const observedMissedIntrusionScore = real === 0 ? forecast.missedIntrusionScore : clamp(100 - (evidence.missedIntrusions / real) * 100);
+  const missedIntrusionScore = blendForecast(forecast.missedIntrusionScore, observedMissedIntrusionScore, real);
   const risk = clamp(securityHealth * 0.68 + missedIntrusionScore * 0.32);
-  const monthlyCost = projectedMonthlyCosts(state).total;
-  const cashRunway = monthlyCost <= 0 ? 100 : clamp((state.economy.cash / (monthlyCost * 12)) * 100);
   const cost = clamp(costEffectiveness * 0.6 + cashRunway * 0.4);
   return {
     performance: Math.round(performance),
@@ -248,11 +379,6 @@ export function recalculateRating(state: GameState, awardDailyPoints = false): v
   const uptime = commissioned.length === 0
     ? 0
     : commissioned.reduce((sum, device) => sum + (device.status === "operational" ? device.health * configuredStats(device.modelId, device.upgradeIds).availability * 100 : 0), 0) / commissioned.length;
-  const outcomeTotal = state.rating.caught + state.rating.escaped;
-  const interdiction = outcomeTotal === 0 ? 48 : (state.rating.caught / outcomeTotal) * 100;
-  const resolvedTotal = state.rating.alarmsResolved + state.rating.falseAlarms;
-  const alarmQuality = resolvedTotal === 0 ? 52 : clamp(100 - (state.rating.falseAlarms / resolvedTotal) * 60);
-  const security = clamp(detectionFusion * 0.42 + interdiction * 0.26 + uptime * 0.2 + alarmQuality * 0.12);
 
   const troopers = state.staff.filter((member) => member.role === "trooper");
   const operators = state.staff.filter((member) => member.role === "operator");
@@ -260,14 +386,33 @@ export function recalculateRating(state: GameState, awardDailyPoints = false): v
   const operatorHappiness = operators.length === 0 ? 0 : operators.reduce((sum, member) => sum + member.happiness, 0) / operators.length;
   const people = trooperHappiness * 0.55 + operatorHappiness * 0.45;
 
-  const lossDrag = state.economy.stolenLosses / 9_000;
-  const savingsLift = state.economy.realisedSavings / 18_000;
-  const costEffectiveness = clamp(52 + savingsLift - lossDrag, 0, Math.min(100, security + 15));
   const staffReadiness = Math.min(1, troopers.length / 3) * 0.5 + Math.min(1, operators.length / 3) * 0.35 + Math.min(1, state.staff.filter((member) => member.role === "engineer").length) * 0.15;
   const assetReadiness = allAssets === 0 ? 0 : operational.length / allAssets;
   const readiness = clamp((assetReadiness * 0.65 + staffReadiness * 0.35) * 100);
   const cognitiveLoad = calculateCognitiveLoad(state);
   const responseReadiness = calculateResponseReadiness(state, cognitiveLoad);
+  const monthlyCost = projectedMonthlyCosts(state).total;
+  const cashRunway = monthlyCost <= 0 ? 100 : clamp((state.economy.cash / (monthlyCost * 12)) * 100);
+  const forecast = capabilityForecast(
+    state,
+    coverage,
+    detectionFusion,
+    uptime,
+    responseReadiness,
+    cognitiveLoad,
+    cashRunway,
+  );
+  const operationalEvidence = evidenceFor(state);
+  const outcomeTotal = state.rating.caught + state.rating.escaped;
+  const observedInterdiction = outcomeTotal === 0 ? forecast.successfulIncidentClosures : (state.rating.caught / outcomeTotal) * 100;
+  const interdiction = blendForecast(forecast.successfulIncidentClosures, observedInterdiction, operationalEvidence.realIncidents);
+  const resolvedTotal = state.rating.alarmsResolved + state.rating.falseAlarms;
+  const observedAlarmQuality = resolvedTotal === 0 ? 100 - forecast.falseAlarmRate : clamp(100 - (state.rating.falseAlarms / resolvedTotal) * 60);
+  const alarmQuality = blendForecast(100 - forecast.falseAlarmRate, observedAlarmQuality, operationalEvidence.realIncidents);
+  const security = clamp(detectionFusion * 0.42 + interdiction * 0.26 + uptime * 0.2 + alarmQuality * 0.12);
+  const lossDrag = state.economy.stolenLosses / 9_000;
+  const savingsLift = state.economy.realisedSavings / 18_000;
+  const costEffectiveness = clamp(52 + savingsLift - lossDrag, 0, Math.min(100, security + 15));
 
   let securityHealth = security * 0.3 + responseReadiness * 0.23 + people * 0.14 + costEffectiveness * 0.13
     + uptime * 0.1 + detectionFusion * 0.1 - cognitiveLoad * 0.08;
@@ -276,7 +421,7 @@ export function recalculateRating(state: GameState, awardDailyPoints = false): v
   if (detectionFusion < 20) securityHealth = Math.min(securityHealth, 49);
   securityHealth = clamp(securityHealth);
   const schedule = scheduleAdherence(state);
-  const overallMetrics = overallMetricsFor(state, securityHealth, costEffectiveness, schedule);
+  const overallMetrics = overallMetricsFor(state, securityHealth, costEffectiveness, schedule, forecast, cashRunway);
   const overallScore = clamp(
     overallMetrics.performance * 0.35
       + overallMetrics.risk * 0.25

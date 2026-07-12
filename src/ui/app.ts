@@ -25,7 +25,8 @@ import { isHardenedPerimeter } from "../sim/rating";
 import { objectiveValue, advanceSimulation } from "../sim/simulation";
 
 type Screen = "title" | "scenarios" | "saves" | "game";
-type Panel = "capability" | "pipeline" | "operations" | "staff" | "finance" | "rating" | "objectives" | "settings" | "device" | null;
+type Panel = "capability" | "pipeline" | "operations" | "staff" | "registry" | "advisor" | "finance" | "rating" | "objectives" | "settings" | "device" | null;
+type FollowTarget = { type: "staff" | "device"; id: string } | null;
 
 const SIM_STEP_SECONDS = 0.1;
 const GAME_MINUTES_PER_STEP = 3.2;
@@ -82,10 +83,12 @@ export class SentinelBaseApp {
   private coverageFilter: CoverageFilter = "all";
   private coverageMenuOpen = false;
   private selectedDeviceId: string | null = null;
+  private selectedStaffId: string | null = null;
+  private followTarget: FollowTarget = null;
   private readonly comparisonModelIds = new Set<string>();
   private readonly pendingDeviceUpgradeIds = new Set<string>();
   private hoverTile: { x: number; y: number } | null = null;
-  private pointer = { x: 0, y: 0, down: false, moved: false, startX: 0, startY: 0 };
+  private pointer = { x: 0, y: 0, down: false, moved: false, startX: 0, startY: 0, inside: false };
   private readonly keys = new Set<string>();
   private lastFrame = performance.now();
   private accumulator = 0;
@@ -112,7 +115,7 @@ export class SentinelBaseApp {
       this.applySentinelBranding(this.state);
       this.screen = "game";
       const requestedPanel = new URLSearchParams(window.location.search).get("panel") as Panel;
-      const availablePanels: Panel[] = ["capability", "pipeline", "operations", "staff", "finance", "rating", "objectives", "settings", "device"];
+      const availablePanels: Panel[] = ["capability", "pipeline", "operations", "staff", "registry", "advisor", "finance", "rating", "objectives", "settings", "device"];
       if (availablePanels.includes(requestedPanel)) this.panel = requestedPanel;
     }
     this.renderScreen();
@@ -127,6 +130,8 @@ export class SentinelBaseApp {
     this.root.addEventListener("input", (event) => this.handleInput(event));
     this.canvas.addEventListener("pointerdown", (event) => this.onPointerDown(event));
     this.canvas.addEventListener("pointermove", (event) => this.onPointerMove(event));
+    this.canvas.addEventListener("pointerenter", (event) => this.onPointerEnter(event));
+    this.canvas.addEventListener("pointerleave", () => { this.pointer.inside = false; });
     window.addEventListener("pointerup", (event) => this.onPointerUp(event));
     this.canvas.addEventListener("contextmenu", (event) => {
       event.preventDefault();
@@ -161,6 +166,7 @@ export class SentinelBaseApp {
       if (majorChange) this.refreshPanelIfChanged();
     }
 
+    this.updateFollowCamera();
     const renderState = this.state && this.screen === "game" ? this.state : this.previewState;
     this.renderer.render(renderState, this.screen === "game" ? this.currentOverlay() : undefined);
     if (time - this.lastHudUpdate > 220) {
@@ -274,6 +280,16 @@ export class SentinelBaseApp {
           <p id="objective-copy" class="objective-copy"></p>
           <div id="objective-progress" class="objective-progress"></div>
           <div class="tutorial-mini"><div><span>Operational checklist</span><b id="tutorial-count"></b></div><div id="tutorial-items"></div></div>
+          <button class="advisor-tip" data-action="open-advisor" title="See the highest-value action for your Overall Score"><span aria-hidden="true">💡</span><span><b>Next best action</b><small>Score guidance</small></span><i aria-hidden="true">›</i></button>
+          <section class="coverage-legend coverage-legend-dock" aria-label="Capability map legend">
+            <span class="legend-title">Map legend</span>
+            ${coverageLegendItem("camera", "Cameras")}
+            ${coverageLegendItem("lidar", "LiDAR")}
+            ${coverageLegendItem("lighting", "Floodlights")}
+            ${coverageLegendItem("drone", "Drones")}
+            ${coverageLegendItem("robot", "Robots")}
+            ${coverageLegendItem("access-control", "Access control")}
+          </section>
         </aside>
 
         <button class="alarm-beacon" data-action="open-operations" aria-label="Open autonomous C2 activity"><span class="alarm-pulse"></span><b id="alarm-count">0</b><span><strong>Autonomous C2</strong><small id="alarm-summary">No active alarms</small></span></button>
@@ -284,16 +300,6 @@ export class SentinelBaseApp {
           <button class="fit-control" data-action="fit-perimeter" title="Fit base perimeter (Home)"><span>◇</span> Fit perimeter</button>
         </nav>
 
-        <aside class="coverage-legend" aria-label="Capability map legend">
-          <span class="legend-title">Map legend</span>
-          ${coverageLegendItem("camera", "Cameras")}
-          ${coverageLegendItem("lidar", "LiDAR")}
-          ${coverageLegendItem("lighting", "Floodlights")}
-          ${coverageLegendItem("drone", "Drones")}
-          ${coverageLegendItem("robot", "Robots")}
-          ${coverageLegendItem("access-control", "Access control")}
-        </aside>
-
         <div class="message-ticker" aria-live="polite"><span id="ticker-tone" class="ticker-marker"></span><strong id="ticker-title"></strong><span id="ticker-text"></span></div>
 
         <footer class="toolbar" aria-label="Build and management tools">
@@ -302,6 +308,7 @@ export class SentinelBaseApp {
           ${toolButton("operations", "⌁", "Operations", "Observe autonomous C2 activity")}
           <div class="toolbar-divider"></div>
           ${toolButton("staff", "♟", "People", "Staff, shifts and happiness")}
+          ${toolButton("registry", "◫", "Registry", "Locate people and assets")}
           ${toolButton("finance", "$", "Finance", "Funding, O&S and ledger")}
           ${toolButton("rating", "◇", "Overall score", "Overall score and operating outcomes")}
           <div class="toolbar-divider"></div>
@@ -418,6 +425,8 @@ export class SentinelBaseApp {
     if (this.panel === "pipeline") return this.pipelinePanel();
     if (this.panel === "operations") return this.operationsPanel();
     if (this.panel === "staff") return this.staffPanel();
+    if (this.panel === "registry") return this.registryPanel();
+    if (this.panel === "advisor") return this.advisorPanel();
     if (this.panel === "finance") return this.financePanel();
     if (this.panel === "rating") return this.ratingPanel();
     if (this.panel === "objectives") return this.objectivesPanel();
@@ -551,6 +560,41 @@ export class SentinelBaseApp {
       <section class="staff-roster"><div class="section-title"><h3>Shift roster</h3><span>00–08 · 08–16 · 16–00</span></div><table><thead><tr><th>Person</th><th>Shift</th><th>Task</th><th>Happiness</th><th>Fatigue</th></tr></thead><tbody>${this.state.staff.map((member) => `<tr><td><span class="person-dot ${member.role}"></span><b>${escapeHtml(member.name)}</b><small>${titleCase(member.role)}</small></td><td>${member.shift === 0 ? "00–08" : member.shift === 1 ? "08–16" : "16–00"}</td><td>${titleCase(member.status)}</td><td>${inlineMeter(member.happiness, happinessTone(member.happiness))}</td><td>${inlineMeter(member.fatigue, member.fatigue > 70 ? "bad" : "neutral")}</td></tr>`).join("")}</tbody></table></section>`;
   }
 
+  private registryPanel(): string {
+    if (!this.state) return "";
+    const following = this.followTarget;
+    const staff = [...this.state.staff].sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name));
+    const devices = [...this.state.devices].sort((a, b) => getModel(a.modelId).kind.localeCompare(getModel(b.modelId).kind) || a.name.localeCompare(b.name));
+    return `
+      <div class="window-intro registry-intro"><span class="intro-icon">◫</span><div><strong>Live registry</strong><p>Select an individual to locate them on the map. Troopers, robots and drones remain under live follow; static capability is focused and highlighted once.</p></div></div>
+      ${following ? `<div class="follow-banner"><span>◎</span><div><b>Live follow active</b><small>${escapeHtml(this.followTargetLabel())} stays centred while the simulation runs.</small></div><button class="button button-light button-small" data-action="stop-follow">Stop following</button></div>` : `<p class="registry-help">Devices show installed configuration in the Device inspector when selected on the map. This registry is for fast operational location and tracking.</p>`}
+      <section class="registry-section"><div class="section-title"><h3>People</h3><span>${staff.length} assigned</span></div><div class="asset-registry-list">${staff.map((member) => {
+        const selected = member.id === this.selectedStaffId;
+        const isFollowing = following?.type === "staff" && following.id === member.id;
+        return `<button class="asset-registry-row ${selected ? "selected" : ""} ${isFollowing ? "following" : ""}" data-action="registry-staff" data-id="${member.id}" aria-pressed="${selected}"><span class="registry-glyph ${member.role}">${member.role === "trooper" ? "♟" : member.role === "operator" ? "⌁" : "⌘"}</span><span class="registry-copy"><b>${escapeHtml(member.name)}</b><small>${titleCase(member.role)} · ${titleCase(member.status)} · sector ${Math.round(member.x)}.${Math.round(member.y)}</small></span><span class="registry-meta"><em>${Math.round(member.happiness)}% happy</em><strong>${isFollowing ? "Tracking" : "Track"}</strong></span></button>`;
+      }).join("") || `<p class="quiet-row">No people are assigned to this command.</p>`}</div></section>
+      <section class="registry-section"><div class="section-title"><h3>Devices</h3><span>${devices.length} installed</span></div><div class="asset-registry-list">${devices.map((device) => {
+        const model = getModel(device.modelId);
+        const mobile = model.kind === "drone" || model.kind === "robot";
+        const selected = device.id === this.selectedDeviceId;
+        const isFollowing = following?.type === "device" && following.id === device.id;
+        return `<button class="asset-registry-row ${selected ? "selected" : ""} ${isFollowing ? "following" : ""}" data-action="registry-device" data-id="${device.id}" aria-pressed="${selected}"><span class="registry-glyph ${model.kind}">${deviceGlyph(model.kind)}</span><span class="registry-copy"><b>${escapeHtml(device.name)}</b><small>${kindLabel(model.kind)} · ${titleCase(device.status)} · sector ${Math.round(device.x)}.${Math.round(device.y)}</small></span><span class="registry-meta"><em>${Math.round(device.health * 100)}% health</em><strong>${mobile ? (isFollowing ? "Tracking" : "Track") : "Focus"}</strong></span></button>`;
+      }).join("") || `<p class="quiet-row">No deployed devices yet.</p>`}</div></section>`;
+  }
+
+  private advisorPanel(): string {
+    if (!this.state) return "";
+    const recommendations = advisorRecommendations(this.state);
+    const primary = recommendations[0];
+    if (!primary) return "";
+    const evidence = this.state.metrics.realIncidents;
+    return `
+      <div class="advisor-hero"><span>💡</span><div><p class="overline">Command advisor</p><h3>${escapeHtml(primary.title)}</h3><p>${escapeHtml(primary.copy)}</p><small>${evidence < 10 ? `Capability forecast blended with ${Math.min(10, evidence)}/10 genuine incidents.` : "Advice is based on live operational evidence."}</small></div></div>
+      <section class="advisor-primary"><div><span>Highest-value next move</span><strong>${escapeHtml(primary.expected)}</strong></div><button class="button button-primary" data-action="advisor-go" data-panel="${primary.panel}">Open ${panelTitle(primary.panel)} →</button></section>
+      <section class="advisor-list"><div class="section-title"><h3>Improve score components</h3><span>Prioritised by current constraint</span></div>${recommendations.slice(1, 6).map((recommendation) => `<article><span class="advisor-rank">${recommendation.rank}</span><div><b>${escapeHtml(recommendation.title)}</b><p>${escapeHtml(recommendation.copy)}</p><small>${escapeHtml(recommendation.expected)}</small></div><button class="button button-light button-small" data-action="advisor-go" data-panel="${recommendation.panel}">Open</button></article>`).join("")}</section>
+      <div class="formula-note"><strong>How to use this</strong><p>The advisor points to the weakest measurable constraint, not merely the next item to purchase. A stronger score needs dependable coverage, usable alerts, capable people, enough runway and timely delivery together.</p></div>`;
+  }
+
   private financePanel(): string {
     if (!this.state) return "";
     const economy = this.state.economy;
@@ -569,6 +613,10 @@ export class SentinelBaseApp {
     const rating = this.state.rating;
     const metrics = rating.overallMetrics;
     const hardened = isHardenedPerimeter(this.state);
+    const evidenceCount = Math.min(10, this.state.metrics.realIncidents);
+    const evidenceLabel = evidenceCount < 10
+      ? `Capability forecast + ${evidenceCount}/10 genuine incidents`
+      : "Measured from live incident history";
     const components = [
       ["Performance", metrics.performance, 35, "Detection, response and successful operational outcomes"],
       ["Risk", metrics.risk, 25, "Perimeter posture less the severe missed-intrusion penalty"],
@@ -578,8 +626,8 @@ export class SentinelBaseApp {
     return `
       <div class="rating-hero"><div class="rating-ring" style="--score:${rating.overallScore * 3.6}deg"><div><strong>${rating.overallScore}</strong><span>/100</span></div></div><div><p class="overline">Overall score</p><h3>${rating.capabilityLevel}</h3><p>${ratingNarrative(rating.overallScore)}</p><span class="points-chip">${hardened ? "Assured perimeter active" : `Perimeter score ${metrics.perimeterSecurityScore}/100`}</span></div></div>
       <section class="score-formula"><div class="section-title"><h3>Programme balance</h3><span>Cost · risk · schedule · performance</span></div>${components.map(([label, value, weight, copy]) => `<div class="score-row"><div><span><b>${label}</b><em>${weight}% weight</em></span><p>${copy}</p></div><strong>${Math.round(value)}</strong><progress max="100" value="${value}">${value}</progress></div>`).join("")}</section>
-      <section class="operational-metrics"><div class="section-title"><h3>Operational performance</h3><span>Measured from real incident history</span></div><div class="rating-grid metric-grid">${overallMetricCard("Incident Detection Rate", `${Math.round(metrics.incidentDetectionRate)}%`, metrics.incidentDetectionRate, "How many genuine incidents were detected")}${overallMetricCard("False Alarm Rate", `${Math.round(metrics.falseAlarmRate)}%`, metrics.falseAlarmRate, "Operator fatigue and wasted response capacity", true)}${overallMetricCard("Mean Time to Detect", formatMinutes(metrics.meanTimeToDetect), inverseMinutesScore(metrics.meanTimeToDetect, 60), "How quickly genuine threats are discovered", true)}${overallMetricCard("Mean Time to Respond", formatMinutes(metrics.meanTimeToRespond), inverseMinutesScore(metrics.meanTimeToRespond, 90), "Time from validated alarm to response", true)}${overallMetricCard("Successful Closures", `${Math.round(metrics.successfulIncidentClosures)}%`, metrics.successfulIncidentClosures, "Operational success after a validated incident")}${overallMetricCard("Missed Intrusions", String(metrics.missedIntrusions), inverseCountScore(metrics.missedIntrusions), "The most serious failure", true)}${overallMetricCard("Perimeter Security", `${Math.round(metrics.perimeterSecurityScore)}/100`, metrics.perimeterSecurityScore, "Coverage, fusion, readiness and asset uptime")}${overallMetricCard("Threats Prevented", String(metrics.threatsPrevented), preventionScore(metrics.threatsPrevented), "Intercepted before reaching a target")}${overallMetricCard("Cost runway", `${Math.round(metrics.cashRunway)}/100`, metrics.cashRunway, "12-month recurring-cost reserve")}${overallMetricCard("Schedule adherence", `${Math.round(metrics.scheduleAdherence)}%`, metrics.scheduleAdherence, "Operational delivery against baseline dates")}</div></section>
-      <div class="formula-note"><strong>How the score behaves</strong><p>Rate-based measures begin neutral until enough events have occurred. Better detection, faster autonomous response, fewer nuisance alarms, sound cost control and on-time delivery raise Overall Score. A missed intrusion is deliberately weighted as a severe risk penalty.</p></div>`;
+      <section class="operational-metrics"><div class="section-title"><h3>Operational performance</h3><span>${evidenceLabel}</span></div><div class="rating-grid metric-grid">${overallMetricCard("Incident Detection Rate", `${Math.round(metrics.incidentDetectionRate)}%`, metrics.incidentDetectionRate, "How many genuine incidents were detected")}${overallMetricCard("False Alarm Rate", `${Math.round(metrics.falseAlarmRate)}%`, metrics.falseAlarmRate, "Operator fatigue and wasted response capacity", true)}${overallMetricCard("Mean Time to Detect", formatMinutes(metrics.meanTimeToDetect), inverseMinutesScore(metrics.meanTimeToDetect, 60), "How quickly genuine threats are discovered", true)}${overallMetricCard("Mean Time to Respond", formatMinutes(metrics.meanTimeToRespond), inverseMinutesScore(metrics.meanTimeToRespond, 90), "Time from validated alarm to response", true)}${overallMetricCard("Successful Closures", `${Math.round(metrics.successfulIncidentClosures)}%`, metrics.successfulIncidentClosures, "Operational success after a validated incident")}${overallMetricCard("Missed Intrusions", String(metrics.missedIntrusions), inverseCountScore(metrics.missedIntrusions), "The most serious failure", true)}${overallMetricCard("Perimeter Security", `${Math.round(metrics.perimeterSecurityScore)}/100`, metrics.perimeterSecurityScore, "Coverage, fusion, readiness and asset uptime")}${overallMetricCard("Threats Prevented", String(metrics.threatsPrevented), preventionScore(metrics.threatsPrevented), "Intercepted before reaching a target")}${overallMetricCard("Cost runway", `${Math.round(metrics.cashRunway)}/100`, metrics.cashRunway, "12-month recurring-cost reserve")}${overallMetricCard("Schedule adherence", `${Math.round(metrics.scheduleAdherence)}%`, metrics.scheduleAdherence, "Operational delivery against baseline dates")}</div></section>
+      <div class="formula-note"><strong>How the score behaves</strong><p>Before ten genuine incidents, Overall Score credits the deployed capability forecast and blends in measured outcomes as evidence arrives. At ten incidents it is fully evidence-led. Better detection, faster autonomous response, fewer nuisance alarms, sound cost control and on-time delivery raise Overall Score. A missed intrusion remains a severe risk penalty.</p></div>`;
   }
 
   private objectivesPanel(): string {
@@ -659,6 +707,7 @@ export class SentinelBaseApp {
     const panelMap: Record<string, Panel> = {
       "open-capability": "capability", capability: "capability", pipeline: "pipeline", "open-pipeline": "pipeline",
       operations: "operations", "open-operations": "operations", staff: "staff", "open-staff": "staff",
+      registry: "registry", advisor: "advisor", "open-advisor": "advisor",
       finance: "finance", "open-finance": "finance", rating: "rating", "open-rating": "rating",
       "open-objectives": "objectives", "open-settings": "settings",
     };
@@ -713,8 +762,16 @@ export class SentinelBaseApp {
     if (action === "order-deploy") { this.placementOrderId = id; this.relocationDeviceId = null; this.placementRotation = 0; this.bulldozing = false; this.panel = null; this.renderPanel(); this.updatePlacementRibbon(); return; }
     if (action === "hire") { this.feedback(hireStaff(this.state, (target.dataset.role ?? "trooper") as StaffRole)); this.renderPanel(); return; }
     if (action === "focus-incident") { this.focusIncident(id); return; }
-    if (action === "inspect-device") { this.selectedDeviceId = id; this.pendingDeviceUpgradeIds.clear(); this.openPanel("device"); return; }
-    if (action === "focus-device") { const device = this.state.devices.find((candidate) => candidate.id === id); if (device) this.renderer.focusOn(device.x, device.y); return; }
+    if (action === "inspect-device") { this.inspectDevice(id); return; }
+    if (action === "focus-device") { this.focusDevice(id); return; }
+    if (action === "registry-device") { this.selectRegistryDevice(id); return; }
+    if (action === "registry-staff") { this.selectRegistryStaff(id); return; }
+    if (action === "stop-follow") { this.followTarget = null; this.renderPanel(); return; }
+    if (action === "advisor-go") {
+      const panel = target.dataset.panel as Panel;
+      if (panel && panel !== "advisor") this.openPanel(panel);
+      return;
+    }
     if (action === "toggle-coverage") { this.showCoverage = !this.showCoverage; return; }
     if (action === "toggle-device-upgrade") {
       if (this.pendingDeviceUpgradeIds.has(id)) this.pendingDeviceUpgradeIds.delete(id);
@@ -823,7 +880,6 @@ export class SentinelBaseApp {
   }
 
   private openPanel(panel: Panel): void {
-    if (this.panel === panel) return;
     this.panel = panel;
     this.renderPanel();
   }
@@ -916,14 +972,22 @@ export class SentinelBaseApp {
 
   private onPointerDown(event: PointerEvent): void {
     if (event.button !== 0 || this.screen !== "game") return;
-    this.pointer = { x: event.clientX, y: event.clientY, down: true, moved: false, startX: event.clientX, startY: event.clientY };
+    this.pointer = { x: event.clientX, y: event.clientY, down: true, moved: false, startX: event.clientX, startY: event.clientY, inside: true };
     this.canvas.setPointerCapture(event.pointerId);
+  }
+
+  private onPointerEnter(event: PointerEvent): void {
+    this.pointer.x = event.clientX;
+    this.pointer.y = event.clientY;
+    this.pointer.inside = true;
   }
 
   private onPointerMove(event: PointerEvent): void {
     this.hoverTile = this.renderer.screenToTile(event.clientX, event.clientY);
     this.pointer.x = event.clientX;
     this.pointer.y = event.clientY;
+    const bounds = this.canvas.getBoundingClientRect();
+    this.pointer.inside = event.clientX >= bounds.left && event.clientX <= bounds.right && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
     if (!this.pointer.down) return;
     const dx = event.clientX - this.pointer.startX;
     const dy = event.clientY - this.pointer.startY;
@@ -955,6 +1019,8 @@ export class SentinelBaseApp {
       this.feedback(result);
       if (result.ok) {
         this.selectedDeviceId = this.relocationDeviceId;
+        this.selectedStaffId = null;
+        this.followTarget = null;
         this.relocationDeviceId = null;
         this.openPanel("device");
       }
@@ -966,11 +1032,11 @@ export class SentinelBaseApp {
     }
     const device = this.renderer.deviceAt(this.state, event.clientX, event.clientY);
     if (device) {
-      this.selectedDeviceId = device.id;
-      this.pendingDeviceUpgradeIds.clear();
-      this.openPanel("device");
+      this.inspectDevice(device.id);
     } else {
       this.selectedDeviceId = null;
+      this.selectedStaffId = null;
+      this.followTarget = null;
       if (this.panel === "device") { this.panel = null; this.renderPanel(); }
     }
   }
@@ -1020,12 +1086,15 @@ export class SentinelBaseApp {
     if (this.keys.has("d") || this.keys.has("arrowright")) this.renderer.pan(-speed, 0);
     if (this.keys.has("w") || this.keys.has("arrowup")) this.renderer.pan(0, speed);
     if (this.keys.has("s") || this.keys.has("arrowdown")) this.renderer.pan(0, -speed);
-    if (!this.pointer.down && !this.panel) {
-      const edge = 8;
-      if (this.pointer.x > 0 && this.pointer.x < edge) this.renderer.pan(speed * 0.65, 0);
-      if (this.pointer.x > window.innerWidth - edge) this.renderer.pan(-speed * 0.65, 0);
-      if (this.pointer.y > 64 && this.pointer.y < 72) this.renderer.pan(0, speed * 0.65);
-      if (this.pointer.y > window.innerHeight - edge) this.renderer.pan(0, -speed * 0.65);
+    if (!this.pointer.down && !this.panel && this.pointer.inside) {
+      const bounds = this.canvas.getBoundingClientRect();
+      const localX = this.pointer.x - bounds.left;
+      const localY = this.pointer.y - bounds.top;
+      const edge = 4;
+      if (localX >= 0 && localX <= edge) this.renderer.pan(speed * 0.5, 0);
+      if (localX >= bounds.width - edge && localX <= bounds.width) this.renderer.pan(-speed * 0.5, 0);
+      if (localY >= 0 && localY <= edge) this.renderer.pan(0, speed * 0.5);
+      if (localY >= bounds.height - edge && localY <= bounds.height) this.renderer.pan(0, -speed * 0.5);
     }
   }
 
@@ -1045,7 +1114,7 @@ export class SentinelBaseApp {
         placement = { modelId: device.modelId, upgradeIds: device.upgradeIds, valid: result.ok, facing: this.placementFacing(this.hoverTile) };
       }
     }
-    return { hoverTile: this.hoverTile, placement, selectedDeviceId: this.selectedDeviceId, showCoverage: this.showCoverage, coverageFilter: this.coverageFilter, bulldozing: this.bulldozing };
+    return { hoverTile: this.hoverTile, placement, selectedDeviceId: this.selectedDeviceId, selectedStaffId: this.selectedStaffId, showCoverage: this.showCoverage, coverageFilter: this.coverageFilter, bulldozing: this.bulldozing };
   }
 
   private updatePlacementRibbon(): void {
@@ -1105,6 +1174,72 @@ export class SentinelBaseApp {
     return Math.max(2_000, Math.round(configuredStats(device.modelId, device.upgradeIds).purchaseCost * 0.05));
   }
 
+  private inspectDevice(id: string): void {
+    if (!this.state || !this.state.devices.some((device) => device.id === id)) return;
+    this.selectedDeviceId = id;
+    this.selectedStaffId = null;
+    this.followTarget = null;
+    this.pendingDeviceUpgradeIds.clear();
+    // Always rerender: selecting another camera, LiDAR or drone while this panel is
+    // already open must replace its configuration immediately.
+    this.openPanel("device");
+  }
+
+  private focusDevice(id: string): void {
+    const device = this.state?.devices.find((candidate) => candidate.id === id);
+    if (!device) return;
+    this.selectedDeviceId = id;
+    this.selectedStaffId = null;
+    this.followTarget = null;
+    this.renderer.focusOn(device.x, device.y);
+  }
+
+  private selectRegistryDevice(id: string): void {
+    const device = this.state?.devices.find((candidate) => candidate.id === id);
+    if (!device) return;
+    this.selectedDeviceId = id;
+    this.selectedStaffId = null;
+    const kind = getModel(device.modelId).kind;
+    if (kind === "drone" || kind === "robot") this.followTarget = { type: "device", id };
+    else this.followTarget = null;
+    this.renderer.focusOn(device.x, device.y);
+    this.renderPanel();
+  }
+
+  private selectRegistryStaff(id: string): void {
+    const member = this.state?.staff.find((candidate) => candidate.id === id);
+    if (!member) return;
+    this.selectedStaffId = id;
+    this.selectedDeviceId = null;
+    this.followTarget = { type: "staff", id };
+    this.renderer.focusOn(member.x, member.y);
+    this.renderPanel();
+  }
+
+  private followTargetLabel(): string {
+    if (!this.state || !this.followTarget) return "Selected unit";
+    if (this.followTarget.type === "staff") return this.state.staff.find((member) => member.id === this.followTarget?.id)?.name ?? "Selected person";
+    return this.state.devices.find((device) => device.id === this.followTarget?.id)?.name ?? "Selected device";
+  }
+
+  private updateFollowCamera(): void {
+    if (!this.state || !this.followTarget) return;
+    if (this.followTarget.type === "staff") {
+      const member = this.state.staff.find((candidate) => candidate.id === this.followTarget?.id);
+      if (member) {
+        this.renderer.focusOn(member.x, member.y);
+        return;
+      }
+    } else {
+      const device = this.state.devices.find((candidate) => candidate.id === this.followTarget?.id);
+      if (device) {
+        this.renderer.focusOn(device.x, device.y);
+        return;
+      }
+    }
+    this.followTarget = null;
+  }
+
   private focusIncident(id: string): void {
     const incident = this.state?.incidents.find((candidate) => candidate.id === id);
     if (!incident) return;
@@ -1146,13 +1281,17 @@ export class SentinelBaseApp {
     if (this.panel === "operations") return JSON.stringify([this.panel,
       state.incidents.map((incident) => [incident.id, incident.status, Math.ceil((incident.readyAt - state.totalMinutes) / 120), Math.ceil((incident.deadlineAt - state.totalMinutes) / 120)])]);
     if (this.panel === "staff") return JSON.stringify([this.panel, state.staff.map((member) => [member.id, Math.round(member.happiness), Math.round(member.fatigue), member.status])]);
+    if (this.panel === "registry") return JSON.stringify([this.panel, this.selectedDeviceId, this.selectedStaffId, this.followTarget,
+      state.staff.map((member) => [member.id, Math.round(member.x), Math.round(member.y), member.status]),
+      state.devices.map((device) => [device.id, Math.round(device.x), Math.round(device.y), device.status, Math.round(device.health * 100)])]);
+    if (this.panel === "advisor") return JSON.stringify([this.panel, state.rating.overallScore, state.rating.overallMetrics, state.metrics.realIncidents, state.rating.operatorHappiness, state.rating.trooperHappiness]);
     if (this.panel === "finance") return JSON.stringify([this.panel, state.economy.cash, state.economy.ledger.length]);
     if (this.panel === "rating") return JSON.stringify([this.panel, state.rating]);
     if (this.panel === "objectives") return JSON.stringify([this.panel, state.scenarioStatus, state.rating, state.tutorial]);
     if (this.panel === "settings") return JSON.stringify([this.panel, state.campName]);
     if (this.panel === "device") {
       const device = state.devices.find((candidate) => candidate.id === this.selectedDeviceId);
-      return JSON.stringify([this.panel, this.selectedDeviceId, device?.status, device?.health, device?.detections, device?.falseAlarms]);
+      return JSON.stringify([this.panel, this.selectedDeviceId, device?.modelId, device?.upgradeIds, device?.status, device?.health, device?.detections, device?.falseAlarms]);
     }
     return String(this.panel);
   }
@@ -1269,7 +1408,7 @@ function stageLabel(stage: string): string {
 function panelTitle(panel: Exclude<Panel, null>): string {
   const titles: Record<Exclude<Panel, null>, string> = {
     capability: "Capability builder", pipeline: "Autonomous delivery", operations: "Autonomous C2", staff: "People & shifts",
-    finance: "Finance & ledger", rating: "Overall score", objectives: "Command objectives", settings: "Save & settings", device: "Device inspector",
+    registry: "Live registry", advisor: "Command advisor", finance: "Finance & ledger", rating: "Overall score", objectives: "Command objectives", settings: "Save & settings", device: "Device inspector",
   };
   return titles[panel];
 }
@@ -1277,7 +1416,7 @@ function panelTitle(panel: Exclude<Panel, null>): string {
 function panelKicker(panel: Exclude<Panel, null>): string {
   const kickers: Record<Exclude<Panel, null>, string> = {
     capability: "Design", pipeline: "Assure", operations: "Observe", staff: "Support", finance: "Steward",
-    rating: "Measure", objectives: "Deliver", settings: "Command", device: "Inspect",
+    registry: "Locate", advisor: "Guide", rating: "Measure", objectives: "Deliver", settings: "Command", device: "Inspect",
   };
   return kickers[panel];
 }
@@ -1333,11 +1472,59 @@ function tutorialEntries(state: GameState) {
 }
 
 function ratingNarrative(score: number): string {
+  if (score >= 90) return "Exemplary command posture: layered capability, timely delivery and a confident workforce have made the camp demonstrably resilient.";
   if (score >= 80) return "Layered sensors, assured delivery and a confident workforce are producing resilient security.";
   if (score >= 65) return "The base is assured, but continued testing and cost discipline can deepen resilience.";
   if (score >= 45) return "Core systems are integrated. Blind sectors or operating pressure still constrain confidence.";
   if (score >= 25) return "Basic coverage exists, but command cannot yet rely on a complete detection-to-response chain.";
   return "The base is fragile. Deliver tested coverage and staff every critical response role.";
+}
+
+type AdvisorRecommendation = {
+  rank: number;
+  priority: number;
+  panel: Exclude<Panel, null>;
+  title: string;
+  copy: string;
+  expected: string;
+};
+
+function advisorRecommendations(state: GameState): AdvisorRecommendation[] {
+  const metrics = state.rating.overallMetrics;
+  const recommendations: AdvisorRecommendation[] = [];
+  const add = (priority: number, panel: Exclude<Panel, null>, title: string, copy: string, expected: string) => {
+    recommendations.push({ rank: 0, priority, panel, title, copy, expected });
+  };
+
+  if (metrics.missedIntrusions > 0) {
+    add(120 + metrics.missedIntrusions * 8, "capability", "Close the missed-intrusion path", "A real threat reached its objective. Layer visual analytics with LiDAR on the affected perimeter and keep an available responder.", "Restores the most severe Risk penalty and makes the next genuine detection more credible.");
+  }
+  const perimeterGap = Math.max(0, 88 - metrics.perimeterSecurityScore);
+  if (perimeterGap > 0) {
+    add(88 + perimeterGap, "capability", "Strengthen the weakest perimeter sector", "Build overlapping camera and LiDAR evidence, then add floodlighting where night coverage is weak. Use Coverage filters to inspect each family separately.", `Raises perimeter posture from ${Math.round(metrics.perimeterSecurityScore)}/100 and improves detection confidence.`);
+  }
+  const falseAlarmGap = Math.max(0, metrics.falseAlarmRate - 16);
+  if (falseAlarmGap > 0 || state.rating.operatorHappiness < 62) {
+    add(78 + falseAlarmGap + Math.max(0, 62 - state.rating.operatorHappiness), "capability", "Reduce operator noise", "Prioritise video analytics and LiDAR fusion in busy sectors. Better corroboration prevents false dispatches and protects the C2 team.", "Lowers false alarms, reduces cognitive workload and raises Performance.");
+  }
+  const responseGap = Math.max(0, metrics.meanTimeToRespond - 55);
+  if (responseGap > 0 || state.rating.trooperHappiness < 62) {
+    add(74 + responseGap / 2 + Math.max(0, 62 - state.rating.trooperHappiness), "staff", "Improve response readiness", "Balance trooper shifts and use robots or drones for routine patrols so a rested response team remains available.", "Shortens response time and improves successful incident closures.");
+  }
+  const costGap = Math.max(0, 68 - metrics.cost);
+  if (costGap > 0) {
+    add(62 + costGap, "finance", "Protect the operating runway", "Check recurring device costs, staffing mix and staged delivery before adding another high-maintenance capability.", "Improves Cost score and preserves future command funding headroom.");
+  }
+  const scheduleGap = Math.max(0, 82 - metrics.schedule);
+  if (scheduleGap > 0) {
+    add(56 + scheduleGap, "pipeline", "Clear delivery constraints", "Use Approve all ready for assurance gates, then deploy and commission completed orders before planned milestones pass.", "Restores Schedule score and turns purchased capability into active coverage.");
+  }
+  if (!recommendations.length) {
+    add(1, "rating", "Maintain an exemplary operating rhythm", "Keep the perimeter layered, staff rotations balanced and lifecycle spending sustainable while live evidence accumulates.", "Sustains Overall Score while the command record matures.");
+  }
+  return recommendations
+    .sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title))
+    .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
 }
 
 type DesirabilityValues = {

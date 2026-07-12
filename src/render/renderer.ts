@@ -7,6 +7,7 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   VIEWPORT_ANCHOR_Y,
+  clampCameraToBounds,
   diamondPoints,
   fitCameraToBounds,
   projectIso,
@@ -29,6 +30,8 @@ export type RenderOverlay = {
   hoverTile: { x: number; y: number } | null;
   placement: { modelId: string; upgradeIds: string[]; valid: boolean; facing: number } | null;
   selectedDeviceId: string | null;
+  /** A selected staff member is highlighted with the same map ring as a device. */
+  selectedStaffId?: string | null;
   showCoverage: boolean;
   /** Limits coverage visualisation to one capability family. */
   coverageFilter?: CoverageFilter;
@@ -43,6 +46,8 @@ export class IsoRenderer {
   private viewport: Viewport = { width: 1, height: 1 };
   private devicePixelRatio = 1;
   private worldCache: GameState["world"] | null = null;
+  /** Owned tiles expanded by a small visual slack; used to contain every camera mutation. */
+  private campCameraBounds: WorldBounds | null = null;
   private pathSet = new Set<number>();
   private groundStructures: Structure[] = [];
   private groundTiles = new Map<number, Structure["type"]>();
@@ -68,6 +73,7 @@ export class IsoRenderer {
     this.canvas.height = Math.round(this.viewport.height * this.devicePixelRatio);
     this.canvas.style.width = `${this.viewport.width}px`;
     this.canvas.style.height = `${this.viewport.height}px`;
+    this.clampCameraToCamp();
     this.invalidateTerrainLayer();
   }
 
@@ -78,6 +84,7 @@ export class IsoRenderer {
     this.drawBackdrop(state?.weather.kind ?? "clear", state?.totalMinutes ?? 9 * 60);
     if (!state) return;
     this.refreshWorldCache(state);
+    this.clampCameraToCamp();
     this.visibleTiles = visibleTileBounds(this.camera, this.viewport, state.world.width, state.world.height, 112, this.maxTerrainHeight);
     this.drawTerrainLayer(state);
 
@@ -117,6 +124,7 @@ export class IsoRenderer {
   pan(dx: number, dy: number): void {
     this.camera.offsetX += dx;
     this.camera.offsetY += dy;
+    this.clampCameraToCamp();
   }
 
   /** Backward-compatible centred zoom; pass screen coordinates to anchor it under a pointer. */
@@ -132,31 +140,21 @@ export class IsoRenderer {
   /** Sets an absolute zoom in the supported 0.20–2.25 range around a screen position. */
   setZoom(zoom: number, screenX = this.viewport.width * 0.5, screenY = this.viewport.height * VIEWPORT_ANCHOR_Y): number {
     Object.assign(this.camera, zoomCameraAt(this.camera, this.viewport, zoom, screenX, screenY));
+    this.clampCameraToCamp();
     return this.camera.zoom;
   }
 
   /** Fits the complete scenario world into the viewport. */
   fitWorld(world: GameState["world"], padding = 48): number {
+    this.updateCampCameraBounds(world);
     return this.fitBounds(world, { minX: 0, minY: 0, maxX: world.width, maxY: world.height }, padding);
   }
 
   /** Fits the owned camp perimeter, excluding off-limits and merely purchasable land. */
   fitPerimeter(world: GameState["world"], padding = 64): number {
-    let minX = world.width;
-    let minY = world.height;
-    let maxX = -1;
-    let maxY = -1;
-    for (let y = 0; y < world.height; y += 1) {
-      for (let x = 0; x < world.width; x += 1) {
-        if (tileOwnership(getPackedTile(world, x, y)) !== "owned") continue;
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x + 1);
-        maxY = Math.max(maxY, y + 1);
-      }
-    }
-    if (maxX < minX || maxY < minY) return this.fitWorld(world, padding);
-    return this.fitBounds(world, { minX, minY, maxX, maxY }, padding);
+    const ownedBounds = this.updateCampCameraBounds(world);
+    if (!ownedBounds) return this.fitBounds(world, { minX: 0, minY: 0, maxX: world.width, maxY: world.height }, padding);
+    return this.fitBounds(world, ownedBounds, padding);
   }
 
   focusOn(x: number, y: number): void {
@@ -164,6 +162,7 @@ export class IsoRenderer {
     this.camera.focusY = y;
     this.camera.offsetX = 0;
     this.camera.offsetY = -40;
+    this.clampCameraToCamp();
   }
 
   get zoomRange(): Readonly<{ min: number; max: number }> {
@@ -187,7 +186,27 @@ export class IsoRenderer {
       for (let x = minTileX; x <= maxTileX; x += 1) maxZ = Math.max(maxZ, tileHeight(getPackedTile(world, x, y)));
     }
     Object.assign(this.camera, fitCameraToBounds({ ...bounds, minZ: 0, maxZ }, this.viewport, padding));
+    this.clampCameraToCamp();
     return this.camera.zoom;
+  }
+
+  /** Rebuilds the owned-perimeter clamp when a different world is supplied. */
+  private updateCampCameraBounds(world: GameState["world"]): WorldBounds | null {
+    const ownedBounds = ownedTileBounds(world);
+    const base = ownedBounds ?? { minX: 0, minY: 0, maxX: world.width, maxY: world.height };
+    const slack = 4;
+    this.campCameraBounds = {
+      minX: Math.max(0, base.minX - slack),
+      minY: Math.max(0, base.minY - slack),
+      maxX: Math.min(world.width, base.maxX + slack),
+      maxY: Math.min(world.height, base.maxY + slack),
+    };
+    return ownedBounds;
+  }
+
+  private clampCameraToCamp(): void {
+    if (!this.campCameraBounds) return;
+    Object.assign(this.camera, clampCameraToBounds(this.camera, this.viewport, this.campCameraBounds));
   }
 
   private invalidateTerrainLayer(): void {
@@ -197,6 +216,7 @@ export class IsoRenderer {
   private refreshWorldCache(state: GameState): void {
     if (this.worldCache === state.world) return;
     this.worldCache = state.world;
+    this.updateCampCameraBounds(state.world);
     this.pathSet = new Set(state.world.paths);
     this.groundStructures = state.world.structures.filter((structure) => ["road", "walkway", "parade", "track", "drone-pad"].includes(structure.type));
     this.groundTiles.clear();
@@ -320,7 +340,7 @@ export class IsoRenderer {
       objects.push({ depth: device.x + device.y + 0.8, layer: 3, entity: { depth: device.x + device.y, x: device.x + 0.5, y: device.y + 0.5, sprite: spriteForDevice(kind, device.modelId), alpha: device.status === "operational" ? 1 : 0.62, status: device.status, selected: device.id === overlay?.selectedDeviceId } });
     });
     const insideBuilding = (x: number, y: number) => state.world.structures.some((structure) => structure.type === "building" && x >= structure.x && x < structure.x + structure.width && y >= structure.y && y < structure.y + structure.height);
-    state.staff.filter((member) => this.pointWithinVisibleTiles(member.x, member.y) && !insideBuilding(member.x, member.y)).forEach((member) => objects.push({ depth: member.x + member.y, layer: 3, entity: { depth: member.x + member.y, x: member.x, y: member.y, sprite: member.role } }));
+    state.staff.filter((member) => this.pointWithinVisibleTiles(member.x, member.y) && !insideBuilding(member.x, member.y)).forEach((member) => objects.push({ depth: member.x + member.y, layer: 3, entity: { depth: member.x + member.y, x: member.x, y: member.y, sprite: member.role, selected: member.id === overlay?.selectedStaffId } }));
     state.intruders.filter((intruder) => intruder.detected && this.pointWithinVisibleTiles(intruder.x, intruder.y) && !insideBuilding(intruder.x, intruder.y)).forEach((intruder) => objects.push({ depth: intruder.x + intruder.y, layer: 3, entity: { depth: intruder.x + intruder.y, x: intruder.x, y: intruder.y, sprite: "intruder" } }));
 
     objects.sort((a, b) => a.depth - b.depth || a.layer - b.layer);
@@ -440,7 +460,7 @@ export class IsoRenderer {
       entities.push({ depth: device.x + device.y, x: device.x + 0.5, y: device.y + 0.5, sprite: spriteForDevice(kind, device.modelId), alpha: device.status === "operational" ? 1 : 0.62, status: device.status, selected: device.id === overlay?.selectedDeviceId });
     });
     const insideBuilding = (x: number, y: number) => state.world.structures.some((structure) => structure.type === "building" && x >= structure.x && x < structure.x + structure.width && y >= structure.y && y < structure.y + structure.height);
-    state.staff.filter((member) => !insideBuilding(member.x, member.y)).forEach((member) => entities.push({ depth: member.x + member.y, x: member.x, y: member.y, sprite: member.role }));
+    state.staff.filter((member) => !insideBuilding(member.x, member.y)).forEach((member) => entities.push({ depth: member.x + member.y, x: member.x, y: member.y, sprite: member.role, selected: member.id === overlay?.selectedStaffId }));
     state.intruders.filter((intruder) => intruder.detected && !insideBuilding(intruder.x, intruder.y)).forEach((intruder) => entities.push({ depth: intruder.x + intruder.y, x: intruder.x, y: intruder.y, sprite: "intruder" }));
     entities.sort((a, b) => a.depth - b.depth);
     entities.forEach((entity) => {
@@ -583,6 +603,24 @@ export class IsoRenderer {
   }
 }
 
+/** Returns the edge-aligned rectangle containing all currently owned camp tiles. */
+function ownedTileBounds(world: GameState["world"]): WorldBounds | null {
+  let minX = world.width;
+  let minY = world.height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < world.height; y += 1) {
+    for (let x = 0; x < world.width; x += 1) {
+      if (tileOwnership(getPackedTile(world, x, y)) !== "owned") continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + 1);
+      maxY = Math.max(maxY, y + 1);
+    }
+  }
+  return maxX < minX || maxY < minY ? null : { minX, minY, maxX, maxY };
+}
+
 function terrainColor(surface: string, ownership: string, x: number, y: number): string {
   const variation = ((x * 17 + y * 29) % 5) - 2;
   const colors: Record<string, string[]> = {
@@ -628,16 +666,16 @@ function strategicSpriteColor(sprite: SpriteName): string {
   if (sprite === "lighting") return "#f4cf68";
   if (sprite === "access-control") return "#6bd6dd";
   if (sprite === "drone") return "#b9cbd0";
-  if (sprite === "camera") return "#72d5b3";
-  if (sprite === "lidar") return "#74a9d8";
+  if (sprite === "camera") return "#ff5c9f";
+  if (sprite === "lidar") return "#55dcff";
   return "#9bc779";
 }
 
 function coverageColor(kind: string): { fill: string; stroke: string } {
-  if (kind === "lidar") return { fill: "rgba(96, 167, 231, .10)", stroke: "rgba(112, 185, 244, .48)" };
+  if (kind === "lidar") return { fill: "rgba(68, 220, 255, .10)", stroke: "rgba(86, 226, 255, .58)" };
   if (kind === "drone") return { fill: "rgba(239, 169, 74, .10)", stroke: "rgba(246, 188, 94, .5)" };
   if (kind === "robot") return { fill: "rgba(177, 125, 231, .10)", stroke: "rgba(193, 144, 245, .5)" };
   if (kind === "lighting") return { fill: "rgba(247, 206, 92, .10)", stroke: "rgba(255, 222, 120, .54)" };
   if (kind === "access-control") return { fill: "rgba(86, 211, 219, .10)", stroke: "rgba(107, 224, 231, .55)" };
-  return { fill: "rgba(86, 206, 174, .10)", stroke: "rgba(86, 206, 174, .48)" };
+  return { fill: "rgba(255, 79, 154, .10)", stroke: "rgba(255, 100, 174, .58)" };
 }

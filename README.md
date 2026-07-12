@@ -35,8 +35,9 @@ The first-capability loop is:
 3. Delivery Autopilot handles ICD/C2 integration, factory acceptance, and site acceptance when they become ready and funded. **Approve all ready** is available as an immediate catch-up control.
 4. Deploy tested fixed assets on a valid owned tile. Drones automatically base at the central pad; configure each one for a fenceline side and Day, Night, or Both patrols.
 5. Upgrade an operational asset or reposition it through a paid, temporary change outage instead of decommissioning it.
-6. Filter map coverage by capability type and use the map legend to find sensor gaps.
-7. Watch autonomous C2 outcomes and the Overall Score: performance, risk, cost, and schedule all count.
+6. Filter map coverage by capability type and use the high-contrast legend below Commander Intent to find sensor gaps.
+7. Open the Command Advisor for the next highest-value score improvement, or use the live Registry to follow people, drones and robots on the map.
+8. Watch autonomous C2 outcomes and the Overall Score: performance, risk, cost, and schedule all count.
 8. Receive at least $2,000,000 in fresh command funding every in-game week; stronger security health and capability points increase the injection without a ceiling.
 
 The command checklist at the left of the game screen walks through this sequence and the first alarm response.
@@ -70,9 +71,9 @@ Click an operational device on the map to inspect its condition, certified confi
 - Autonomous operator validation, trooper/mobile dispatch, response outcomes, incident history, and C2 notifications.
 - Troopers, operators, and engineers on three shifts with fatigue, happiness, payroll, and hiring.
 - A traceable ledger, recurring O&S, weekly command allocations, cost savings, emergency continuity funding, and refunds.
-- Explainable Overall Score across performance, risk, cost, and schedule; incident detection, false alarms, MTTD, MTTR, closures, missed intrusions, perimeter score, prevention, capability points, and progression from Fragile to Exemplary.
+- Explainable Overall Score across performance, risk, cost, and schedule; a capability forecast blends into measured evidence across the first ten genuine incidents, making a hardened, well-run camp able to reach 90+ Exemplary.
 - Three scenarios, endless Sandbox, an optional five-step walkthrough, manual save, monthly autosave, and JSON import/export.
-- Code-generated sprite atlas, main-map capability legend, filtered coverage overlays, 0.20x-2.25x pointer-centred zoom, perimeter fitting, and cull/cached Canvas rendering with HTML/CSS management UI.
+- Code-generated sprite atlas, high-contrast magenta Camera and cyan LiDAR map cues, a docked capability legend, filtered coverage overlays, 0.20x-2.25x pointer-centred zoom, perimeter fitting, camp-bounded panning, and cull/cached Canvas rendering with HTML/CSS management UI.
 
 The detailed product boundary, formulas, roadmap, milestones, and corrected acceptance criteria are in [GAME_DESIGN.md](./GAME_DESIGN.md). Exact current tuning and implementation notes are in [BALANCE.md](./BALANCE.md).
 

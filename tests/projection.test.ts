@@ -6,6 +6,7 @@ import {
   MIN_ZOOM,
   TILE_H,
   TILE_W,
+  clampCameraToBounds,
   clampZoom,
   diamondPoints,
   fitCameraToBounds,
@@ -58,6 +59,28 @@ describe("2:1 isometric projection", () => {
     expect(after.x).toBeCloseTo(before.x, 10);
     expect(after.y).toBeCloseTo(before.y, 10);
     expect(zoomed.zoom).toBe(1.8);
+  });
+
+  it("contains the camera anchor within the owned perimeter and four-tile slack", () => {
+    const viewport = { width: 1_440, height: 900 };
+    const perimeterWithSlack = { minX: 14, minY: 14, maxX: 86, maxY: 86 };
+    const farOutside = { focusX: 50, focusY: 50, offsetX: -9_000, offsetY: 7_000, zoom: 1.15 };
+
+    const clamped = clampCameraToBounds(farOutside, viewport, perimeterWithSlack);
+    const anchor = unprojectIso(viewport.width / 2, viewport.height * 0.47, clamped, viewport);
+
+    expect(anchor.x).toBeGreaterThanOrEqual(perimeterWithSlack.minX - 0.000_001);
+    expect(anchor.x).toBeLessThanOrEqual(perimeterWithSlack.maxX + 0.000_001);
+    expect(anchor.y).toBeGreaterThanOrEqual(perimeterWithSlack.minY - 0.000_001);
+    expect(anchor.y).toBeLessThanOrEqual(perimeterWithSlack.maxY + 0.000_001);
+  });
+
+  it("does not disturb a camera that is already inside its camp bounds", () => {
+    const viewport = { width: 1_200, height: 760 };
+    const camera = { focusX: 50, focusY: 50, offsetX: 0, offsetY: -36, zoom: 0.82 };
+    const clamped = clampCameraToBounds(camera, viewport, { minX: 14, minY: 14, maxX: 86, maxY: 86 });
+
+    expect(clamped).toEqual(camera);
   });
 
   it("fits a complete default world into a desktop viewport", () => {

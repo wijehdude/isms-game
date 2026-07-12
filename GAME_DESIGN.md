@@ -29,9 +29,9 @@ The game is deliberately not an approval simulator. Capability Builder supports 
 
 C2 is autonomous. Operators verify alarms and dispatch available troopers, robots, or drones, while the player changes outcomes indirectly by improving evidence quality, reducing false alarms, adding coverage, sustaining people, and fielding mobile capability. Drones automatically occupy one of eight central pad berths and use a player-selected fenceline side plus Day, Night, or Both routine patrol. The C2 view is therefore an operational record, not a button-click queue.
 
-Overall Score is the visible command rating. It weights Performance 35%, Risk 25%, Cost 25%, and Schedule 15%, using detection rate, false alarms, MTTD, MTTR, closure success, early prevention, perimeter security, missed intrusions, lifecycle cost effectiveness, cash runway, and planned-versus-actual delivery. Security Health remains an internal security/funding measure. Capability points build over time from proven performance. Every seven in-game days command injects at least $2m, with uncapped upside based on Security Health and capability points. At the hardened-perimeter thresholds (85 Health, 8,000 points, 70% coverage, 85% fusion, 85% response readiness, and 90% uptime), intruders are deterministically detected and intercepted.
+Overall Score is the visible command rating. It weights Performance 35%, Risk 25%, Cost 25%, and Schedule 15%, using detection rate, false alarms, MTTD, MTTR, closure success, early prevention, perimeter security, missed intrusions, lifecycle cost effectiveness, cash runway, and planned-versus-actual delivery. For the first ten genuine incidents, a capability forecast blends into measured evidence so a mature camp is rewarded before it has a large incident sample; after ten, the score is fully evidence-led. Security Health remains an internal security/funding measure. Capability points build over time from proven performance. Every seven in-game days command injects at least $2m, with uncapped upside based on Security Health and capability points. At the hardened-perimeter thresholds (85 Health, 8,000 points, 70% coverage, 85% fusion, 85% response readiness, and 90% uptime), intruders are deterministically detected and intercepted. A fully layered, staffed and sustainable camp can reach the 90+ Exemplary end-state.
 
-First launch offers a five-step walkthrough that can be skipped, suppressed, or replayed from Save & Settings. Camera zoom ranges from 0.20x to 2.25x with pointer-centred wheel zoom and a Fit Perimeter command. The renderer culls off-screen tiles and entities, uses a low-zoom terrain cache, and caps canvas resolution scaling to preserve smooth play.
+First launch offers a five-step walkthrough that can be skipped, suppressed, or replayed from Save & Settings. Camera zoom ranges from 0.20x to 2.25x with pointer-centred wheel zoom and a Fit Perimeter command. Drag, keyboard and 4px canvas-edge panning are clamped to the owned perimeter with four tiles of visual slack, preventing the map from drifting into unused terrain. The renderer culls off-screen tiles and entities, uses a low-zoom terrain cache, and caps canvas resolution scaling to preserve smooth play.
 
 ---
 
@@ -131,7 +131,7 @@ screenY = (x + y) * 16 - z * 16
 
 `TILE_W` is 64, `TILE_H` is 32, and `HEIGHT_STEP` is 16 before zoom. Projection is isolated from game state so camera rotation can remain a future option without rewriting the simulation.
 
-Terrain is rendered in increasing `x + y` depth. Structures and entities use stable depth ordering. The camera supports drag, keyboard and edge panning, plus continuous zoom clamped to approximately 0.48x-1.65x.
+Terrain is rendered in increasing `x + y` depth. Structures and entities use stable depth ordering. The camera supports drag, keyboard and a 4px canvas-edge pan region; every camera movement stays within the owned camp plus four tiles of slack. Continuous zoom is clamped to 0.20x-2.25x.
 
 Patrols and human responders use deterministic four-way A* routes around buildings, fences, and water. Intruders also route around buildings and water but treat the perimeter fence as breachable ground, so their approach is not forced through the main gate.
 
@@ -412,7 +412,7 @@ costEffectiveness = clamp(52 + savingsLift - lossDrag,
                           min(100, securityEffectiveness + 15))
 ```
 
-Readiness combines 65% accepted-asset readiness and 35% staff readiness. Within staff readiness, three troopers supply 50%, three operators 35%, and one engineer 15%. Schedule confidence starts at 55, gains 30% of readiness, and loses 1.5 points per open order. Cognitive workload rises with active incidents, manual feeds, and false-alarm rate; analytics and adequate operators reduce it. Response readiness combines operator presence, available troopers or mobile systems, happiness, fatigue, and cognitive workload.
+Readiness combines 65% accepted-asset readiness and 35% staff readiness. Within staff readiness, three troopers supply 50%, three operators 35%, and one engineer 15%. Schedule adherence is 100 when no delivery milestone is active and penalizes late commissioning against planned dates. Cognitive workload rises with active incidents, manual feeds, and false-alarm rate; analytics and adequate operators reduce it. Response readiness combines operator presence, available troopers or mobile systems, happiness, fatigue, and cognitive workload.
 
 ### 10.3 Camp rating — Current
 
@@ -470,9 +470,9 @@ The lower eligible level is used if either its points or rating gate is not met.
 ### 11.2 Main HUD — Current
 
 - **Top bar:** camp name, date/time, weather/temperature, cash, active alarm count, Overall Score, simulation speed, settings.
-- **Left command dock:** scenario objectives and the first-capability tutorial checklist.
+- **Left command dock:** scenario objectives, first-capability tutorial checklist, Command Advisor entry point, and a high-contrast map legend (magenta Cameras, cyan LiDAR).
 - **Message ticker:** most recent operational, financial, weather, or project notification.
-- **Bottom toolbar:** Capability, Delivery, C2 Alarms, People, Finance, Rating, coverage overlay, and decommission.
+- **Bottom toolbar:** Capability, Delivery, C2 Alarms, People, live Registry, Finance, Rating, coverage overlay, and decommission. The Registry follows selected troopers, robots and drones live; static assets are focused and highlighted.
 - **Windows:** accessible HTML panels for configuration, lifecycle gates, incidents, roster, ledger, scoring, objectives, settings, and device inspection.
 - **Placement feedback:** ghost, footprint, valid/invalid color, contextual ribbon, and toast reason.
 

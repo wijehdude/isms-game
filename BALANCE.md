@@ -32,7 +32,7 @@ There is no monthly allocation in Sentinel Base. Monthly close continues to post
 
 Delivery Autopilot progresses ready ICD integration, factory acceptance, and site acceptance gates when staff and funding permit. Existing assets accept module upgrades through an offline integration/test change order and can be relocated for `max($2,000, 5% of installed acquisition)` plus a migration outage. C2 validates alarms and dispatches available troopers, robots, or drones automatically. Ready drones auto-base at the eight-slot central pad; players select a North, East, South, or West route and Day, Night, or Both patrol window.
 
-The displayed Overall Score weights Performance 35%, Risk 25%, Cost 25%, and Schedule 15%. Its operational metrics include Incident Detection Rate, False Alarm Rate, MTTD, MTTR, Successful Incident Closures, Missed Intrusions, Perimeter Security Score, and Threats Prevented. Security Health remains the funding/hardened-perimeter measure. Capability points are awarded daily and on successful responses. At the hardened-perimeter threshold, fully operational high-quality coverage guarantees detection and successful interception; it provides an explicit end-state rather than an endless dice roll.
+The displayed Overall Score weights Performance 35%, Risk 25%, Cost 25%, and Schedule 15%. Its operational metrics include Incident Detection Rate, False Alarm Rate, MTTD, MTTR, Successful Incident Closures, Missed Intrusions, Perimeter Security Score, and Threats Prevented. A capability forecast supplies early score evidence and blends linearly into observed outcomes over the first 10 genuine incidents; at 10 incidents the score is wholly evidence-led. Security Health remains the funding/hardened-perimeter measure. Capability points are awarded daily and on successful responses. At the hardened-perimeter threshold, fully operational high-quality coverage guarantees detection and successful interception; a fully layered, staffed, sustainable posture reaches 90+ Overall Score / Exemplary rather than being capped by missing history.
 
 Each vendor product and configuration option publishes a 1-10 desirability card for Cost, Capability, Availability, Scalability, Interoperability, and Lead Time. Cost and Lead Time are reverse-scored. Quoted equipment cost is `base cost × capability factor × availability factor × scalability factor × interoperability factor × deadline urgency factor × vendor markup`; timed scenarios apply 1.00-1.25 urgency based on deadline pressure and unmet objectives, while Sandbox remains 1.00.
 
@@ -453,7 +453,8 @@ asset readiness = operational assets / (deployed assets + open orders)
 
 readiness = (asset readiness * 0.65 + staff readiness * 0.35) * 100
 
-schedule confidence = clamp(55 + readiness * 0.30 - open orders * 1.5)
+schedule adherence = 100 when there are no active delivery milestones
+                   = average punctuality of planned commissioning milestones otherwise
 ```
 
 Schedule adherence compares planned operational dates with actual commissioning and gives the Overall Score its 15% schedule component.

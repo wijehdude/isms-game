@@ -77,6 +77,49 @@ export function zoomCameraAt(
   };
 }
 
+/**
+ * Keeps the ground point beneath the camera's visual anchor inside a world-space box.
+ *
+ * Camera panning is expressed as a screen-space offset, so clamping `focusX` and
+ * `focusY` alone would still allow the view to drift indefinitely.  Instead we
+ * clamp the world coordinate currently under the anchor and translate the offset
+ * by the corresponding isometric delta.  This preserves the public camera shape
+ * (including pointer-centred zoom) while making it safe to call after any camera
+ * mutation.
+ */
+export function clampCameraToBounds(camera: CameraState, viewport: Viewport, bounds: WorldBounds): CameraState {
+  const zoom = clampZoom(camera.zoom);
+  const normalized: CameraState = {
+    focusX: Number.isFinite(camera.focusX) ? camera.focusX : 0,
+    focusY: Number.isFinite(camera.focusY) ? camera.focusY : 0,
+    offsetX: Number.isFinite(camera.offsetX) ? camera.offsetX : 0,
+    offsetY: Number.isFinite(camera.offsetY) ? camera.offsetY : 0,
+    zoom,
+  };
+  const minX = Math.min(bounds.minX, bounds.maxX);
+  const maxX = Math.max(bounds.minX, bounds.maxX);
+  const minY = Math.min(bounds.minY, bounds.maxY);
+  const maxY = Math.max(bounds.minY, bounds.maxY);
+  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return normalized;
+
+  const anchorX = viewport.width * 0.5;
+  const anchorY = viewport.height * VIEWPORT_ANCHOR_Y;
+  const current = unprojectIso(anchorX, anchorY, normalized, viewport);
+  const target = {
+    x: Math.max(minX, Math.min(maxX, current.x)),
+    y: Math.max(minY, Math.min(maxY, current.y)),
+  };
+  if (target.x === current.x && target.y === current.y) return normalized;
+
+  const currentRaw = rawProject(current.x, current.y);
+  const targetRaw = rawProject(target.x, target.y);
+  return {
+    ...normalized,
+    offsetX: normalized.offsetX - (targetRaw.x - currentRaw.x) * zoom,
+    offsetY: normalized.offsetY - (targetRaw.y - currentRaw.y) * zoom,
+  };
+}
+
 /** Fits an isometric world-space box into the viewport without changing rotation. */
 export function fitCameraToBounds(bounds: WorldBounds, viewport: Viewport, padding = 48): CameraState {
   const minX = Math.min(bounds.minX, bounds.maxX);
