@@ -10,14 +10,14 @@ import { advanceSimulation } from "../src/sim/simulation";
 const NEVER = Number.MAX_SAFE_INTEGER;
 
 describe("Sentinel Base starting baseline", () => {
-  it("starts every mode with $20m and the operational 8-camera/12-light perimeter", () => {
+  it("starts every mode with $10m and the operational 8-camera/12-light perimeter", () => {
     for (const scenario of SCENARIOS) {
       const state = createGame(scenario.id, scenario.seed);
       const cameras = state.devices.filter((device) => device.modelId === "camera-fixed");
       const lights = state.devices.filter((device) => device.modelId === "floodlight");
 
-      expect(state.version).toBe(2);
-      expect(state.economy.cash).toBe(20_000_000);
+      expect(state.version).toBe(3);
+      expect(state.economy.cash).toBe(10_000_000);
       expect(cameras).toHaveLength(8);
       expect(lights).toHaveLength(12);
       expect(cameras.every((device) => device.status === "operational" && device.upgradeIds.includes("va-intrusion"))).toBe(true);

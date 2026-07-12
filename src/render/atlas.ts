@@ -1,4 +1,4 @@
-export type SpriteName = "camera" | "lidar" | "robot-dog" | "robot-humanoid" | "drone" | "lighting" | "trooper" | "operator" | "engineer" | "intruder";
+export type SpriteName = "camera" | "lidar" | "robot-dog" | "robot-humanoid" | "drone" | "lighting" | "access-control" | "trooper" | "operator" | "engineer" | "intruder";
 
 type SpriteRect = { x: number; y: number; width: number; height: number };
 
@@ -10,7 +10,7 @@ export class RuntimeSpriteAtlas {
 
   constructor() {
     this.canvas = document.createElement("canvas");
-    this.canvas.width = 480;
+    this.canvas.width = 576;
     this.canvas.height = 48;
     const context = this.canvas.getContext("2d");
     if (!context) throw new Error("Canvas 2D is unavailable.");
@@ -32,7 +32,7 @@ export class RuntimeSpriteAtlas {
   }
 
   private generate(): void {
-    const names: SpriteName[] = ["camera", "lidar", "robot-dog", "robot-humanoid", "drone", "lighting", "trooper", "operator", "engineer", "intruder"];
+    const names: SpriteName[] = ["camera", "lidar", "robot-dog", "robot-humanoid", "drone", "lighting", "access-control", "trooper", "operator", "engineer", "intruder"];
     names.forEach((name, index) => {
       const x = index * 48;
       this.sprites.set(name, { x, y: 0, width: 48, height: 48 });
@@ -66,6 +66,10 @@ export class RuntimeSpriteAtlas {
       pixel(9, 10, 4, 4, "#273337"); pixel(36, 10, 4, 4, "#273337"); pixel(22, 29, 6, 6, "#29383b"); pixel(24, 31, 3, 3, "#65d6c0");
     } else if (name === "lighting") {
       pixel(22, 14, 4, 29, "#3b4650"); pixel(18, 41, 12, 3, "#222c31"); pixel(16, 10, 18, 9, "#f4e6a5"); pixel(18, 12, 14, 5, "#fff6c7");
+    } else if (name === "access-control") {
+      // A compact gate pedestal / card-reader: cyan is reserved for access control in the map legend.
+      pixel(19, 12, 11, 29, "#344a4c"); pixel(17, 39, 15, 5, "#202d30"); pixel(21, 16, 7, 11, "#75dde1"); pixel(23, 18, 3, 4, "#d9fbf8");
+      pixel(12, 19, 5, 3, "#71888a"); pixel(32, 19, 5, 3, "#71888a");
     } else {
       const palettes: Record<string, { torso: string; cap: string }> = {
         trooper: { torso: "#253f54", cap: "#182c3b" }, operator: { torso: "#3f6f68", cap: "#294c47" },

@@ -23,11 +23,15 @@ import {
 export const DEVICE_PIXEL_RATIO_CAP = 1.75;
 export type RendererOptions = { maxDevicePixelRatio?: number };
 
+export type CoverageFilter = "all" | "camera" | "lidar" | "drone" | "robot" | "lighting" | "access-control";
+
 export type RenderOverlay = {
   hoverTile: { x: number; y: number } | null;
   placement: { modelId: string; upgradeIds: string[]; valid: boolean; facing: number } | null;
   selectedDeviceId: string | null;
   showCoverage: boolean;
+  /** Limits coverage visualisation to one capability family. */
+  coverageFilter?: CoverageFilter;
   bulldozing: boolean;
 };
 
@@ -80,9 +84,12 @@ export class IsoRenderer {
     if (overlay?.showCoverage) {
       state.devices.filter((device) => device.status === "operational").forEach((device) => {
         const model = getModel(device.modelId);
+        const kind = model.kind as string;
+        if (overlay.coverageFilter && overlay.coverageFilter !== "all" && kind !== overlay.coverageFilter) return;
         const stats = configuredStats(device.modelId, device.upgradeIds);
-        if (model.kind === "camera" && !device.upgradeIds.includes("panoramic") && device.facing !== undefined) this.drawFovCone(device.x + 0.5, device.y + 0.5, stats.range, device.facing, "rgba(86, 206, 174, .10)", "rgba(86, 206, 174, .38)");
-        else this.drawCoverage(device.x, device.y, stats.range, "rgba(86, 206, 174, .08)", "rgba(86, 206, 174, .28)");
+        const color = coverageColor(kind);
+        if (kind === "camera" && !device.upgradeIds.includes("panoramic") && device.facing !== undefined) this.drawFovCone(device.x + 0.5, device.y + 0.5, stats.range, device.facing, color.fill, color.stroke);
+        else this.drawCoverage(device.x, device.y, stats.range, color.fill, color.stroke);
       });
     }
     if (overlay?.placement && overlay.hoverTile) {
@@ -335,7 +342,7 @@ export class IsoRenderer {
     const point = this.project(entity.x, entity.y);
     if (!this.visible(point, 50)) return;
     if (this.camera.zoom < 0.34) {
-      const radius = ["camera", "lidar", "robot-dog", "robot-humanoid", "drone", "lighting"].includes(entity.sprite) ? 3 : 1.8;
+      const radius = ["camera", "lidar", "robot-dog", "robot-humanoid", "drone", "lighting", "access-control"].includes(entity.sprite) ? 3 : 1.8;
       this.context.globalAlpha = entity.alpha ?? 1;
       this.context.fillStyle = strategicSpriteColor(entity.sprite);
       this.context.beginPath(); this.context.arc(point.x, point.y - radius, radius, 0, Math.PI * 2); this.context.fill();
@@ -604,11 +611,12 @@ function buildingPalette(palette?: Structure["palette"]) {
   return { roof: "#c9c3ac", left: "#8f9287", right: "#777f78" };
 }
 
-function spriteForDevice(kind: DeviceKind, modelId: string): SpriteName {
+function spriteForDevice(kind: DeviceKind | string, modelId: string): SpriteName {
   if (kind === "camera") return "camera";
   if (kind === "lidar") return "lidar";
   if (kind === "drone") return "drone";
   if (kind === "lighting") return "lighting";
+  if (kind === "access-control") return "access-control";
   return modelId === "robot-humanoid" ? "robot-humanoid" : "robot-dog";
 }
 
@@ -618,8 +626,18 @@ function strategicSpriteColor(sprite: SpriteName): string {
   if (sprite === "operator") return "#d1a45b";
   if (sprite === "engineer") return "#66a77c";
   if (sprite === "lighting") return "#f4cf68";
+  if (sprite === "access-control") return "#6bd6dd";
   if (sprite === "drone") return "#b9cbd0";
   if (sprite === "camera") return "#72d5b3";
   if (sprite === "lidar") return "#74a9d8";
   return "#9bc779";
+}
+
+function coverageColor(kind: string): { fill: string; stroke: string } {
+  if (kind === "lidar") return { fill: "rgba(96, 167, 231, .10)", stroke: "rgba(112, 185, 244, .48)" };
+  if (kind === "drone") return { fill: "rgba(239, 169, 74, .10)", stroke: "rgba(246, 188, 94, .5)" };
+  if (kind === "robot") return { fill: "rgba(177, 125, 231, .10)", stroke: "rgba(193, 144, 245, .5)" };
+  if (kind === "lighting") return { fill: "rgba(247, 206, 92, .10)", stroke: "rgba(255, 222, 120, .54)" };
+  if (kind === "access-control") return { fill: "rgba(86, 211, 219, .10)", stroke: "rgba(107, 224, 231, .55)" };
+  return { fill: "rgba(86, 206, 174, .10)", stroke: "rgba(86, 206, 174, .48)" };
 }

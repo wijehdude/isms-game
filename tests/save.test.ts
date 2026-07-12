@@ -25,11 +25,11 @@ describe("versioned save state", () => {
 
   it("rejects malformed JSON and unsupported state shapes", () => {
     expect(() => deserializeState("not-json")).toThrow();
-    expect(() => deserializeState(JSON.stringify({ version: 3, campName: "Future Camp" }))).toThrow(
-      "This file is not a supported Sentinel Base v2 save.",
+    expect(() => deserializeState(JSON.stringify({ version: 4, campName: "Future Camp" }))).toThrow(
+      "This file is not a supported Sentinel Base v3 save. Sentinel Base v1 and v2 saves start fresh.",
     );
     expect(() => deserializeState(JSON.stringify({
-      version: 2,
+      version: 3,
       campName: "Partial Camp",
       scenarioId: "sandbox",
       totalMinutes: 0,
@@ -39,14 +39,16 @@ describe("versioned save state", () => {
       world: {},
       devices: [],
       staff: [],
-    }))).toThrow("This file is not a supported Sentinel Base v2 save.");
+    }))).toThrow("This file is not a supported Sentinel Base v3 save. Sentinel Base v1 and v2 saves start fresh.");
   });
 
-  it("starts fresh by explicitly rejecting legacy v1 state", () => {
+  it("starts fresh by explicitly rejecting legacy v1 and v2 state", () => {
     const legacy = JSON.parse(serializeState(createGame("sandbox", 222))) as Record<string, unknown>;
     legacy.version = 1;
 
-    expect(() => deserializeState(JSON.stringify(legacy))).toThrow("This file is not a supported Sentinel Base v2 save.");
+    expect(() => deserializeState(JSON.stringify(legacy))).toThrow("This file is not a supported Sentinel Base v3 save. Sentinel Base v1 and v2 saves start fresh.");
+    legacy.version = 2;
+    expect(() => deserializeState(JSON.stringify(legacy))).toThrow("This file is not a supported Sentinel Base v3 save. Sentinel Base v1 and v2 saves start fresh.");
   });
 
   it("has a safe empty result when browser storage is unavailable", () => {

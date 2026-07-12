@@ -5,17 +5,21 @@ import {
   activeIncidents,
   approveAllReady,
   decommissionAt,
+  configureDronePatrol,
   formatMoney,
   hireStaff,
   placeOrder,
   procureDevice,
+  repositionDevice,
+  upgradeDevice,
+  validateDevicePlacement,
   validatePlacement,
 } from "../game/actions";
-import { DEVICE_MODELS, UPGRADES, configuredStats, getModel, getUpgrade, upgradesFor } from "../game/catalog";
+import { DEVICE_MODELS, UPGRADES, configuredStats, getModel, getUpgrade, quoteConfiguredStats, upgradeComparison, upgradesFor, vendorComparison } from "../game/catalog";
 import { createGame } from "../game/createGame";
 import { getScenario, SCENARIOS } from "../game/scenarios";
-import type { ActionResult, Device, GameState, Incident, ProcurementOrder, StaffRole } from "../game/types";
-import { IsoRenderer, type RenderOverlay } from "../render/renderer";
+import type { ActionResult, Device, DronePatrol, GameState, Incident, ProcurementOrder, StaffRole } from "../game/types";
+import { IsoRenderer, type CoverageFilter, type RenderOverlay } from "../render/renderer";
 import { projectedMonthlyCosts, weeklyFundingAmount } from "../sim/economy";
 import { isHardenedPerimeter } from "../sim/rating";
 import { objectiveValue, advanceSimulation } from "../sim/simulation";
@@ -32,7 +36,7 @@ const WALKTHROUGH_STEPS = [
     kicker: "Welcome to Sentinel Base",
     title: "The simulation is paused while you get your bearings.",
     copy: "Your job is to build a dependable detection-to-response capability without exhausting the people or the budget. You can replay this tour from Save & settings at any time.",
-    cue: "The top bar tracks time, weather, funds, staffing, operational assets and the base rating.",
+    cue: "The top bar tracks time, weather, funds, staffing, operational assets and the Overall Score.",
   },
   {
     kicker: "1 · Design",
@@ -55,7 +59,7 @@ const WALKTHROUGH_STEPS = [
   {
     kicker: "4 · Improve",
     title: "Security, people and cost all count.",
-    copy: "Use Finance, People and Capability rating to find the next constraint. Weekly funding reacts to proven performance, while avoidable losses and nuisance alarms erode confidence.",
+    copy: "Use Finance, People and Overall Score to find the next constraint. Weekly funding reacts to proven performance, while avoidable losses and nuisance alarms erode confidence.",
     cue: "Resume at 1×, 2× or 4× when you are ready. Space pauses whenever you need to think.",
   },
 ] as const;
@@ -71,10 +75,15 @@ export class SentinelBaseApp {
   private selectedUpgradeIds = new Set<string>(["va-intrusion"]);
   private procurementQuantity = 1;
   private placementOrderId: string | null = null;
+  private relocationDeviceId: string | null = null;
   private placementRotation = 0;
   private bulldozing = false;
   private showCoverage = false;
+  private coverageFilter: CoverageFilter = "all";
+  private coverageMenuOpen = false;
   private selectedDeviceId: string | null = null;
+  private readonly comparisonModelIds = new Set<string>();
+  private readonly pendingDeviceUpgradeIds = new Set<string>();
   private hoverTile: { x: number; y: number } | null = null;
   private pointer = { x: 0, y: 0, down: false, moved: false, startX: 0, startY: 0 };
   private readonly keys = new Set<string>();
@@ -214,7 +223,7 @@ export class SentinelBaseApp {
               <div class="scenario-copy"><p class="overline">${escapeHtml(scenario.subtitle)}</p><h2>${escapeHtml(scenario.name)}</h2><p>${escapeHtml(scenario.description)}</p><div class="objective-box"><span>Commander objective</span><strong>${escapeHtml(scenario.objectiveText)}</strong></div><button class="button button-primary" data-action="scenario-start" data-id="${scenario.id}">Accept command →</button></div>
             </article>`).join("")}
         </section>
-        <section class="sandbox-strip"><div><span class="sandbox-icon">∞</span><div><p class="overline">No deadline · all systems available</p><h2>Open Command sandbox</h2><p>Build indefinitely, tune your architecture and chase the highest capability score.</p></div></div><button class="button button-light" data-action="start-sandbox">Enter sandbox →</button></section>
+        <section class="sandbox-strip"><div><span class="sandbox-icon">∞</span><div><p class="overline">No deadline · all systems available</p><h2>Open Command sandbox</h2><p>Build indefinitely, tune your architecture and improve the overall programme score.</p></div></div><button class="button button-light" data-action="start-sandbox">Enter sandbox →</button></section>
       </main>`;
   }
 
@@ -251,7 +260,7 @@ export class SentinelBaseApp {
             <button class="top-metric" data-action="open-finance"><span>Available funds</span><strong id="hud-cash"></strong><small id="hud-burn"></small></button>
             <button class="top-metric" data-action="open-staff"><span>On duty</span><strong id="hud-staff"></strong><small>troopers · operators</small></button>
             <button class="top-metric" data-action="open-pipeline"><span>Operational assets</span><strong id="hud-assets"></strong><small id="hud-faults"></small></button>
-            <button class="top-metric rating-metric" data-action="open-rating"><span>Security capability</span><strong><b id="hud-rating"></b><em>/100</em></strong><small id="hud-tier"></small></button>
+            <button class="top-metric rating-metric" data-action="open-rating"><span>Overall score</span><strong><b id="hud-rating"></b><em>/100</em></strong><small id="hud-tier"></small></button>
           </div>
           <div class="speed-controls" aria-label="Simulation speed">
             <button data-action="speed" data-speed="0" title="Pause (Space)" aria-label="Pause">Ⅱ</button>
@@ -275,6 +284,16 @@ export class SentinelBaseApp {
           <button class="fit-control" data-action="fit-perimeter" title="Fit base perimeter (Home)"><span>◇</span> Fit perimeter</button>
         </nav>
 
+        <aside class="coverage-legend" aria-label="Capability map legend">
+          <span class="legend-title">Map legend</span>
+          ${coverageLegendItem("camera", "Cameras")}
+          ${coverageLegendItem("lidar", "LiDAR")}
+          ${coverageLegendItem("lighting", "Floodlights")}
+          ${coverageLegendItem("drone", "Drones")}
+          ${coverageLegendItem("robot", "Robots")}
+          ${coverageLegendItem("access-control", "Access control")}
+        </aside>
+
         <div class="message-ticker" aria-live="polite"><span id="ticker-tone" class="ticker-marker"></span><strong id="ticker-title"></strong><span id="ticker-text"></span></div>
 
         <footer class="toolbar" aria-label="Build and management tools">
@@ -284,9 +303,9 @@ export class SentinelBaseApp {
           <div class="toolbar-divider"></div>
           ${toolButton("staff", "♟", "People", "Staff, shifts and happiness")}
           ${toolButton("finance", "$", "Finance", "Funding, O&S and ledger")}
-          ${toolButton("rating", "◇", "Capability", "Security rating breakdown")}
+          ${toolButton("rating", "◇", "Overall score", "Overall score and operating outcomes")}
           <div class="toolbar-divider"></div>
-          <button class="tool-button" data-action="toggle-coverage" title="Toggle device coverage (F)"><span class="tool-icon">◎</span><small>Coverage</small></button>
+          <div class="coverage-control"><button class="tool-button ${this.showCoverage ? "active" : ""}" data-action="toggle-coverage-menu" title="Filter device coverage (F)"><span class="tool-icon">◎</span><small>Coverage</small></button><div class="coverage-menu ${this.coverageMenuOpen ? "open" : ""}" role="menu"><div><b>Coverage overlay</b><button data-action="coverage-off">Hide overlay</button></div>${coverageFilterItems(this.coverageFilter).join("")}</div></div>
           <button class="tool-button danger-tool" data-action="bulldoze" title="Decommission an asset"><span class="tool-icon">⌫</span><small>Remove</small></button>
         </footer>
 
@@ -324,8 +343,8 @@ export class SentinelBaseApp {
     const faults = state.devices.filter((device) => device.status === "fault").length;
     setText("hud-assets", `${operational} / ${state.devices.length}`);
     setText("hud-faults", faults ? `${faults} fault${faults === 1 ? "" : "s"}` : "all reporting");
-    setText("hud-rating", String(state.rating.campRating));
-    setText("hud-tier", `${state.rating.capabilityLevel} · ${state.rating.capabilityPoints.toLocaleString()} pts`);
+    setText("hud-rating", String(state.rating.overallScore));
+    setText("hud-tier", `${state.rating.capabilityLevel} · performance, risk, cost & schedule`);
     document.querySelectorAll<HTMLButtonElement>("[data-action='speed']").forEach((button) => button.classList.toggle("active", Number(button.dataset.speed) === state.speed));
 
     setText("objective-title", scenario.name);
@@ -411,20 +430,46 @@ export class SentinelBaseApp {
     if (!this.state) return "";
     const model = getModel(this.selectedModelId);
     const selected = [...this.selectedUpgradeIds].filter((id) => getUpgrade(id).kinds.includes(model.kind));
-    const stats = configuredStats(model.id, selected);
+    const stats = quoteConfiguredStats(model.id, selected, this.state);
     const quantity = Math.max(1, Math.min(99, Math.round(this.procurementQuantity)));
     const batchPurchase = stats.purchaseCost * quantity;
     const batchProgramme = stats.totalProgrammeCost * quantity;
     const cashAfter = this.state.economy.cash - batchPurchase;
+    const kinds = [...new Set(DEVICE_MODELS.map((item) => item.kind))];
+    const comparisonIds = [...this.comparisonModelIds].filter((id) => DEVICE_MODELS.some((modelItem) => modelItem.id === id));
+    const comparisonModels = comparisonIds.map(getModel);
+    const modelsInKind = DEVICE_MODELS.filter((item) => item.kind === model.kind);
     return `
-      <div class="window-intro"><span class="intro-icon">＋</span><div><strong>Capability builder</strong><p>Configure once, procure 1–99 identical assets, and see the complete batch commitment before approval.</p></div></div>
-      <div class="catalog-tabs">${DEVICE_MODELS.map((item) => `<button class="catalog-tab ${item.id === model.id ? "active" : ""}" data-action="select-model" data-id="${item.id}"><span>${deviceGlyph(item.kind)}</span><small>${escapeHtml(item.shortName)}</small><b>${formatMoney(item.cost)}</b></button>`).join("")}</div>
-      <section class="config-hero"><div><span class="kind-chip">${titleCase(model.kind)}</span><h3>${escapeHtml(model.name)}</h3><p>${escapeHtml(model.description)}</p></div><div class="config-price"><span>Batch acquisition</span><strong>${formatMoney(batchPurchase)}</strong><small>${formatMoney(stats.purchaseCost)} each · ${formatMoney(batchProgramme)} through acceptance</small></div></section>
+      <div class="window-intro"><span class="intro-icon">＋</span><div><strong>Capability marketplace</strong><p>Compare vendor products on the same six desirability measures, then configure the selected product for a certified batch.</p></div></div>
+      <div class="catalog-tabs catalog-kind-tabs">${kinds.map((kind) => `<button class="catalog-tab ${kind === model.kind ? "active" : ""}" data-action="select-kind" data-kind="${kind}"><span>${deviceGlyph(kind)}</span><small>${escapeHtml(kindLabel(kind))}</small><b>${DEVICE_MODELS.filter((item) => item.kind === kind).length} products</b></button>`).join("")}</div>
+      ${comparisonModels.length ? `<section class="comparison-tray"><div class="section-title"><h3>Vendor comparison</h3><span>Up to 3 pinned products</span></div><div class="comparison-grid">${comparisonModels.map((item) => this.productComparisonCard(item, item.id === model.id ? selected : [])).join("")}</div></section>` : `<div class="compare-hint"><span>⇄</span><p>Pin up to three products to compare their vendor attributes side by side.</p></div>`}
+      <section class="product-gallery"><div class="section-title"><h3>${escapeHtml(kindLabel(model.kind))} products</h3><span>Choose one product to configure</span></div><div class="product-grid">${modelsInKind.map((item) => this.productCard(item, item.id === model.id, this.comparisonModelIds.has(item.id))).join("")}</div></section>
+      <section class="config-hero"><div><span class="kind-chip">${titleCase(model.kind)} · ${escapeHtml(model.vendor)}</span><h3>${escapeHtml(model.name)}</h3><p>${escapeHtml(model.description)}</p></div><div class="config-price"><span>Batch acquisition</span><strong>${formatMoney(batchPurchase)}</strong><small>${formatMoney(stats.purchaseCost)} each · ${formatMoney(batchProgramme)} through acceptance</small></div></section>
       <section class="quantity-card"><div><label for="procurement-quantity">Procurement quantity</label><small>One certified configuration, repeated across the batch.</small></div><div class="quantity-control"><button data-action="quantity-down" aria-label="Decrease quantity">−</button><input id="procurement-quantity" data-focus-key="procurement-quantity" data-quantity type="number" inputmode="numeric" min="1" max="99" step="1" value="${quantity}" aria-label="Procurement quantity"><button data-action="quantity-up" aria-label="Increase quantity">+</button></div></section>
-      <section class="config-section"><div class="section-title"><h3>Configuration add-ons</h3><span>${selected.length} selected · applied to all ${quantity}</span></div><div class="upgrade-grid">${upgradesFor(model.kind).map((upgrade) => `<label class="upgrade-option ${this.selectedUpgradeIds.has(upgrade.id) ? "selected" : ""}"><input type="checkbox" data-focus-key="upgrade-${upgrade.id}" data-upgrade="${upgrade.id}" ${this.selectedUpgradeIds.has(upgrade.id) ? "checked" : ""}><span><b>${escapeHtml(upgrade.name)}</b><small>${escapeHtml(upgrade.description)}</small></span><strong>+${formatMoney(upgrade.cost)} ea</strong></label>`).join("") || `<p class="muted-copy">This capability has no optional modules.</p>`}</div></section>
+      <section class="config-section"><div class="section-title"><h3>Configuration options</h3><span>${selected.length} selected · applied to all ${quantity}</span></div><p class="configuration-help">Select option cards to add them. All attribute bars show desirability: longer is better, including the reverse-scored cost and lead-time bars.</p><div class="upgrade-grid upgrade-product-grid">${upgradesFor(model.kind).map((upgrade) => this.upgradeOptionCard(upgrade.id, this.selectedUpgradeIds.has(upgrade.id), quantity)).join("") || `<p class="muted-copy">This capability has no optional modules.</p>`}</div></section>
       <section class="performance-card"><div class="section-title"><h3>Forecast performance</h3><span>before placement effects</span></div><div class="performance-grid">${metricBar("Range", `${Math.round(stats.range)} tiles`, Math.min(100, stats.range * 5))}${metricBar("Detection", `${Math.round(stats.accuracy * 100)}%`, stats.accuracy * 100)}${metricBar("Availability", `${(stats.availability * 100).toFixed(1)}%`, stats.availability * 100)}${metricBar("False alarm", `${(stats.falseAlarmRate * 100).toFixed(1)}%`, Math.max(5, 100 - stats.falseAlarmRate * 2_500), true)}</div></section>
-      <div class="cost-breakdown"><div><span>Hardware & options</span><b>${formatMoney(batchPurchase)}</b></div><div><span>ICD / integration</span><b>${formatMoney(model.integrationCost * quantity)}</b></div><div><span>Factory test + SAT</span><b>${formatMoney((model.testCost + model.commissionCost) * quantity)}</b></div><div><span>Lead time</span><b>${model.leadHours}h</b></div><div><span>Forecast O&S</span><b>${formatMoney(stats.monthlyOps * quantity)}/mo</b></div><div><span>Whole programme</span><b>${formatMoney(batchProgramme)}</b></div></div>
-      <div class="commit-bar ${cashAfter < 0 ? "insufficient" : ""}"><div><span>Available after batch order</span><strong>${formatMoney(cashAfter)}</strong><small>${quantity} × ${escapeHtml(model.shortName)}</small></div><button class="button button-primary" data-action="procure" ${cashAfter < 0 ? "disabled" : ""}>Approve ${quantity} asset${quantity === 1 ? "" : "s"} · ${formatMoney(batchPurchase)}</button></div>`;
+      <div class="cost-breakdown"><div><span>Quoted hardware & options</span><b>${formatMoney(batchPurchase)}</b></div><div><span>ICD / integration</span><b>${formatMoney(model.integrationCost * quantity)}</b></div><div><span>Factory test + SAT</span><b>${formatMoney((model.testCost + model.commissionCost) * quantity)}</b></div><div><span>Vendor lead time</span><b>${model.leadHours}h</b></div><div><span>Forecast O&S</span><b>${formatMoney(stats.monthlyOps * quantity)}/mo</b></div><div><span>Whole programme</span><b>${formatMoney(batchProgramme)}</b></div></div>
+      <div class="commit-bar ${cashAfter < 0 ? "insufficient" : ""}"><div><span>Available after batch order</span><strong>${formatMoney(cashAfter)}</strong><small>${quantity} × ${escapeHtml(model.shortName)} · ${escapeHtml(model.vendor)}</small></div><button class="button button-primary" data-action="procure" ${cashAfter < 0 ? "disabled" : ""}>Approve ${quantity} asset${quantity === 1 ? "" : "s"} · ${formatMoney(batchPurchase)}</button></div>`;
+  }
+
+  private productCard(model: (typeof DEVICE_MODELS)[number], selected: boolean, pinned: boolean): string {
+    const comparison = vendorComparison(model.id, [], this.currentQuoteUrgency(model.id));
+    return `<article class="product-card ${selected ? "selected" : ""} ${pinned ? "pinned" : ""}">
+      <button class="product-select" data-action="select-model" data-id="${model.id}"><span class="product-glyph ${model.kind}">${deviceGlyph(model.kind)}</span><span class="product-copy"><small>${escapeHtml(comparison.vendor)} · ${escapeHtml(kindLabel(model.kind))}</small><b>${escapeHtml(model.name)}</b><em>${escapeHtml(model.description)}</em></span><span class="product-price"><b>${formatMoney(comparison.cost)}</b><small>${comparison.leadHours}h lead</small></span></button>
+      <div class="product-bars">${desirabilityBars(comparison.attributes, comparison.cost, comparison.leadHours)}</div>
+      <button class="compare-pin ${pinned ? "pinned" : ""}" data-action="pin-compare" data-id="${model.id}" aria-pressed="${pinned}" title="${pinned ? "Remove from comparison" : "Pin for comparison"}">${pinned ? "✓ Compared" : "⇄ Compare"}</button>
+    </article>`;
+  }
+
+  private productComparisonCard(model: (typeof DEVICE_MODELS)[number], upgradeIds: string[]): string {
+    const comparison = vendorComparison(model.id, upgradeIds, this.currentQuoteUrgency(model.id));
+    return `<article class="comparison-card ${model.id === this.selectedModelId ? "selected" : ""}"><header><span class="product-glyph ${model.kind}">${deviceGlyph(model.kind)}</span><div><small>${escapeHtml(comparison.vendor)}</small><b>${escapeHtml(model.shortName)}</b></div><button data-action="pin-compare" data-id="${model.id}" title="Remove from comparison" aria-label="Remove ${escapeHtml(model.name)} from comparison">×</button></header><div class="comparison-value"><strong>${formatMoney(comparison.cost)}</strong><span>${comparison.leadHours}h lead</span></div><div class="product-bars">${desirabilityBars(comparison.attributes, comparison.cost, comparison.leadHours)}</div></article>`;
+  }
+
+  private upgradeOptionCard(upgradeId: string, selected: boolean, quantity: number): string {
+    const upgrade = getUpgrade(upgradeId);
+    const comparison = upgradeComparison(upgradeId, this.currentQuoteUrgency(this.selectedModelId));
+    return `<button type="button" class="upgrade-option vendor-option ${selected ? "selected" : ""}" data-action="toggle-upgrade" data-id="${upgradeId}" aria-pressed="${selected}"><span class="option-check">${selected ? "✓" : "+"}</span><span class="option-copy"><b>${escapeHtml(upgrade.name)}</b><small>${escapeHtml(upgrade.description)}</small><em>${escapeHtml(comparison.vendor)} · ${comparison.leadHours}h addition</em></span><span class="option-price"><b>+${formatMoney(comparison.cost * quantity)}</b><small>${formatMoney(comparison.cost)} each</small></span><span class="option-bars">${desirabilityBars(comparison.attributes, comparison.cost, comparison.leadHours, true)}</span></button>`;
   }
 
   private pipelinePanel(): string {
@@ -450,7 +495,9 @@ export class SentinelBaseApp {
     const stages = ["procurement", "integration-review", "integrating", "factory-test", "testing", "ready"];
     const stageIndex = stages.indexOf(order.stage);
     const action = order.stage === "ready"
-      ? `<button class="button button-primary button-small" data-action="order-deploy" data-id="${order.id}">Deploy on map →</button>`
+      ? model.kind === "drone"
+        ? `<span class="eta-pill ready">Auto-basing at drone pad</span>`
+        : `<button class="button button-primary button-small" data-action="order-deploy" data-id="${order.id}">Deploy on map →</button>`
       : order.stage === "integration-review" || order.stage === "factory-test"
         ? `<span class="eta-pill ready">Autopilot ready</span>`
         : `<span class="eta-pill">${formatDuration(order.readyAt - this.state.totalMinutes)} remaining</span>`;
@@ -520,20 +567,19 @@ export class SentinelBaseApp {
   private ratingPanel(): string {
     if (!this.state) return "";
     const rating = this.state.rating;
+    const metrics = rating.overallMetrics;
     const hardened = isHardenedPerimeter(this.state);
     const components = [
-      ["Operational security", rating.securityEffectiveness, 30, "Coverage, alarm quality, interdiction and uptime"],
-      ["Response readiness", rating.responseReadiness, 23, "Available responders, fatigue and autonomous decision speed"],
-      ["People & wellbeing", rating.peopleWellbeing, 14, "Trooper and operator happiness after workload and fatigue"],
-      ["Cost effectiveness", rating.costEffectiveness, 13, "Delivered security, avoided losses and verified savings"],
-      ["Asset uptime", rating.uptime, 10, "Commissioned assets that remain online"],
-      ["Fused detection", rating.detectionFusion, 10, "Complementary sensor evidence at likely ingress sectors"],
+      ["Performance", metrics.performance, 35, "Detection, response and successful operational outcomes"],
+      ["Risk", metrics.risk, 25, "Perimeter posture less the severe missed-intrusion penalty"],
+      ["Cost", metrics.cost, 25, "Lifecycle value and recurring-cost cash runway"],
+      ["Schedule", metrics.schedule, 15, "Operational milestones delivered when promised"],
     ] as const;
     return `
-      <div class="rating-hero"><div class="rating-ring" style="--score:${rating.securityHealth * 3.6}deg"><div><strong>${rating.securityHealth}</strong><span>/100</span></div></div><div><p class="overline">Security Health</p><h3>${rating.capabilityLevel}</h3><p>${ratingNarrative(rating.securityHealth)}</p><span class="points-chip">${hardened ? "Assured perimeter active" : `${rating.capabilityPoints.toLocaleString()} lifetime points`}</span></div></div>
-      <section class="score-formula"><div class="section-title"><h3>Security Health composition</h3><span>Weighted evidence minus cognitive workload</span></div>${components.map(([label, value, weight, copy]) => `<div class="score-row"><div><span><b>${label}</b><em>${weight}% weight</em></span><p>${copy}</p></div><strong>${Math.round(value)}</strong><progress max="100" value="${value}">${value}</progress></div>`).join("")}<div class="score-row"><div><span><b>Cognitive workload</b><em>-8% drag</em></span><p>Manual feeds, nuisance alarms and active queues reduce operator decision quality.</p></div><strong>${Math.round(rating.cognitiveLoad)}</strong><progress class="inverted" max="100" value="${rating.cognitiveLoad}">${rating.cognitiveLoad}</progress></div></section>
-      <div class="rating-grid"><div><span>Threat-weighted coverage</span><strong>${rating.coverage}%</strong><small>${rating.coverage < 35 ? "Critical blind sectors remain" : "Coverage is contributing credibly"}</small></div><div><span>Fused detection</span><strong>${rating.detectionFusion}%</strong><small>Evidence quality at ingress sectors</small></div><div><span>Response readiness</span><strong>${rating.responseReadiness}%</strong><small>Available people and mobile systems</small></div><div><span>C2 workload</span><strong>${rating.cognitiveLoad}%</strong><small>Lower is better</small></div><div><span>Trooper happiness</span><strong>${rating.trooperHappiness}%</strong><small>Response confidence and workload</small></div><div><span>Operator happiness</span><strong>${rating.operatorHappiness}%</strong><small>Alarm quality and console workload</small></div></div>
-      <div class="formula-note"><strong>How to harden the perimeter</strong><p>Pair coverage with fused evidence, protect operator attention, and keep responders ready. No troopers or operators caps Security Health at 39; weak fused detection caps it at 49. At 85 Health with high coverage, fusion, readiness and uptime, Sentinel Base enters an assured-perimeter state: intruders are always detected and intercepted.</p></div>`;
+      <div class="rating-hero"><div class="rating-ring" style="--score:${rating.overallScore * 3.6}deg"><div><strong>${rating.overallScore}</strong><span>/100</span></div></div><div><p class="overline">Overall score</p><h3>${rating.capabilityLevel}</h3><p>${ratingNarrative(rating.overallScore)}</p><span class="points-chip">${hardened ? "Assured perimeter active" : `Perimeter score ${metrics.perimeterSecurityScore}/100`}</span></div></div>
+      <section class="score-formula"><div class="section-title"><h3>Programme balance</h3><span>Cost · risk · schedule · performance</span></div>${components.map(([label, value, weight, copy]) => `<div class="score-row"><div><span><b>${label}</b><em>${weight}% weight</em></span><p>${copy}</p></div><strong>${Math.round(value)}</strong><progress max="100" value="${value}">${value}</progress></div>`).join("")}</section>
+      <section class="operational-metrics"><div class="section-title"><h3>Operational performance</h3><span>Measured from real incident history</span></div><div class="rating-grid metric-grid">${overallMetricCard("Incident Detection Rate", `${Math.round(metrics.incidentDetectionRate)}%`, metrics.incidentDetectionRate, "How many genuine incidents were detected")}${overallMetricCard("False Alarm Rate", `${Math.round(metrics.falseAlarmRate)}%`, metrics.falseAlarmRate, "Operator fatigue and wasted response capacity", true)}${overallMetricCard("Mean Time to Detect", formatMinutes(metrics.meanTimeToDetect), inverseMinutesScore(metrics.meanTimeToDetect, 60), "How quickly genuine threats are discovered", true)}${overallMetricCard("Mean Time to Respond", formatMinutes(metrics.meanTimeToRespond), inverseMinutesScore(metrics.meanTimeToRespond, 90), "Time from validated alarm to response", true)}${overallMetricCard("Successful Closures", `${Math.round(metrics.successfulIncidentClosures)}%`, metrics.successfulIncidentClosures, "Operational success after a validated incident")}${overallMetricCard("Missed Intrusions", String(metrics.missedIntrusions), inverseCountScore(metrics.missedIntrusions), "The most serious failure", true)}${overallMetricCard("Perimeter Security", `${Math.round(metrics.perimeterSecurityScore)}/100`, metrics.perimeterSecurityScore, "Coverage, fusion, readiness and asset uptime")}${overallMetricCard("Threats Prevented", String(metrics.threatsPrevented), preventionScore(metrics.threatsPrevented), "Intercepted before reaching a target")}${overallMetricCard("Cost runway", `${Math.round(metrics.cashRunway)}/100`, metrics.cashRunway, "12-month recurring-cost reserve")}${overallMetricCard("Schedule adherence", `${Math.round(metrics.scheduleAdherence)}%`, metrics.scheduleAdherence, "Operational delivery against baseline dates")}</div></section>
+      <div class="formula-note"><strong>How the score behaves</strong><p>Rate-based measures begin neutral until enough events have occurred. Better detection, faster autonomous response, fewer nuisance alarms, sound cost control and on-time delivery raise Overall Score. A missed intrusion is deliberately weighted as a severe risk penalty.</p></div>`;
   }
 
   private objectivesPanel(): string {
@@ -567,12 +613,34 @@ export class SentinelBaseApp {
     if (!device) return `<p class="quiet-row">Select a device on the map or in the registry.</p>`;
     const model = getModel(device.modelId);
     const stats = configuredStats(device.modelId, device.upgradeIds);
+    const selectableUpgrades = upgradesFor(model.kind).filter((upgrade) => !device.upgradeIds.includes(upgrade.id));
+    const selectedUpgrades = [...this.pendingDeviceUpgradeIds].filter((id) => selectableUpgrades.some((upgrade) => upgrade.id === id));
+    const currentQuote = quoteConfiguredStats(device.modelId, device.upgradeIds, this.state);
+    const targetQuote = quoteConfiguredStats(device.modelId, [...device.upgradeIds, ...selectedUpgrades], this.state);
+    const selectedUpgradeCost = targetQuote.quote.upgradeCost - currentQuote.quote.upgradeCost + model.integrationCost + model.testCost;
+    const patrolSide = device.dronePatrol?.side ?? "north";
+    const patrolSchedule = device.dronePatrol?.schedule ?? "both";
+    const isDrone = model.kind === "drone";
+    const canModify = device.status === "operational" && !this.state.incidents.some((incident) => incident.status === "responding" && incident.assignedResponderId === device.id);
     return `
       <div class="device-inspector"><div class="large-device-glyph">${deviceGlyph(model.kind)}</div><div><span class="status-chip ${device.status}">${titleCase(device.status)}</span><h3>${escapeHtml(device.name)}</h3><p>${escapeHtml(model.description)}</p></div></div>
       <div class="inspector-stats"><div><span>Sector</span><b>${Math.round(device.x)}.${Math.round(device.y)}</b></div><div><span>Condition</span><b>${Math.round(device.health * 100)}%</b></div><div><span>Coverage range</span><b>${Math.round(stats.range)} tiles</b></div><div><span>Availability</span><b>${(stats.availability * 100).toFixed(1)}%</b></div><div><span>Detections</span><b>${device.detections}</b></div><div><span>False alarms</span><b>${device.falseAlarms}</b></div></div>
       <section class="settings-block"><h3>Certified configuration</h3><div class="module-list">${device.upgradeIds.length ? device.upgradeIds.map((id) => `<span>${escapeHtml(getUpgrade(id).name)}</span>`).join("") : `<p class="muted-copy">Standard configuration; no optional modules.</p>`}</div></section>
-      <div class="formula-note"><strong>Operational effect</strong><p>${device.status === "operational" ? "This asset contributes to detection coverage, uptime and the base capability score." : "This asset contributes only after its site acceptance test and commissioning are complete."}</p></div>
-      <div class="inspector-actions"><button class="button button-light" data-action="focus-device" data-id="${device.id}">Focus on map</button><button class="button button-danger" data-action="arm-remove">Decommission tool</button></div>`;
+      ${selectableUpgrades.length && canModify ? `<section class="device-upgrades"><div class="section-title"><h3>Upgrade this asset</h3><span>Installed in place · asset is briefly offline</span></div><p class="configuration-help">Choose compatible improvements that are not already certified. These are controlled change orders, not a replacement purchase.</p><div class="upgrade-grid upgrade-product-grid">${selectableUpgrades.map((upgrade) => this.deviceUpgradeCard(device.id, upgrade.id, this.pendingDeviceUpgradeIds.has(upgrade.id))).join("")}</div>${selectedUpgrades.length ? `<div class="device-change-order"><div><span>Selected change order</span><strong>${selectedUpgrades.length} upgrade${selectedUpgrades.length === 1 ? "" : "s"} · ${formatMoney(selectedUpgradeCost)}</strong><small>Includes module hardware, ICD integration and factory verification before the asset returns online.</small></div><button class="button button-primary" data-action="apply-device-upgrades" data-id="${device.id}">Upgrade asset</button></div>` : ""}</section>` : selectableUpgrades.length ? `<div class="formula-note"><strong>Change control is unavailable</strong><p>${device.status !== "operational" ? "The asset must return to operational status before another modification can begin." : "This asset is assigned to a live response and is temporarily protected from change."}</p></div>` : ""}
+      ${isDrone ? `<section class="drone-patrol-panel"><div class="section-title"><h3>Automated patrol route</h3><span>Launches from the central drone pad</span></div><p class="configuration-help">Pick one fenceline for this drone to loop during its scheduled shift. Incident dispatch temporarily overrides the route, then restores it.</p><div class="patrol-options"><div><b>Fenceline</b><span>${(["north", "east", "south", "west"] as const).map((side) => `<button class="${patrolSide === side ? "selected" : ""}" data-action="configure-drone-route" data-id="${device.id}" data-side="${side}" data-schedule="${patrolSchedule}">${titleCase(side)}</button>`).join("")}</span></div><div><b>Patrol window</b><span>${(["day", "night", "both"] as const).map((schedule) => `<button class="${patrolSchedule === schedule ? "selected" : ""}" data-action="configure-drone-route" data-id="${device.id}" data-side="${patrolSide}" data-schedule="${schedule}">${schedule === "both" ? "Day + night" : titleCase(schedule)}</button>`).join("")}</span></div></div></section>` : ""}
+      <div class="formula-note"><strong>Operational effect</strong><p>${device.status === "operational" ? "This asset contributes to coverage, detection quality and the Overall Score while online." : "This asset returns to contribution only after its current assurance work completes."}</p></div>
+      <div class="inspector-actions"><button class="button button-light" data-action="focus-device" data-id="${device.id}">Focus on map</button>${!isDrone && canModify ? `<button class="button button-light" data-action="arm-reposition" data-id="${device.id}">Reposition · change cost</button>` : ""}<button class="button button-danger" data-action="arm-remove">Decommission tool</button></div>`;
+  }
+
+  private deviceUpgradeCard(deviceId: string, upgradeId: string, selected: boolean): string {
+    const upgrade = getUpgrade(upgradeId);
+    const device = this.state?.devices.find((candidate) => candidate.id === deviceId);
+    const comparison = upgradeComparison(upgradeId, this.currentQuoteUrgency(device?.modelId ?? this.selectedModelId));
+    return `<button type="button" class="upgrade-option vendor-option ${selected ? "selected" : ""}" data-action="toggle-device-upgrade" data-id="${upgradeId}" data-device-id="${deviceId}" aria-pressed="${selected}"><span class="option-check">${selected ? "✓" : "+"}</span><span class="option-copy"><b>${escapeHtml(upgrade.name)}</b><small>${escapeHtml(upgrade.description)}</small><em>${escapeHtml(comparison.vendor)} · ${comparison.leadHours}h modification</em></span><span class="option-price"><b>+${formatMoney(comparison.cost)}</b><small>change hardware</small></span><span class="option-bars">${desirabilityBars(comparison.attributes, comparison.cost, comparison.leadHours, true)}</span></button>`;
+  }
+
+  private currentQuoteUrgency(modelId: string): number {
+    return this.state ? quoteConfiguredStats(modelId, [], this.state).quote.urgencyFactor : 1;
   }
 
   private handleClick(event: Event): void {
@@ -601,11 +669,40 @@ export class SentinelBaseApp {
     if (action === "zoom-out") { this.renderer.zoomBy(0.9); return; }
     if (action === "zoom-in") { this.renderer.zoomBy(1.1); return; }
     if (action === "fit-perimeter") { this.renderer.fitPerimeter(this.state.world); return; }
+    if (action === "toggle-coverage-menu") { this.coverageMenuOpen = !this.coverageMenuOpen; this.renderGameShell(); return; }
+    if (action === "coverage-off") { this.showCoverage = false; this.coverageMenuOpen = false; this.renderGameShell(); return; }
+    if (action === "coverage-filter") {
+      this.coverageFilter = (target.dataset.filter ?? "all") as CoverageFilter;
+      this.showCoverage = true;
+      this.coverageMenuOpen = false;
+      this.renderGameShell();
+      return;
+    }
+    if (action === "select-kind") {
+      const kind = target.dataset.kind;
+      const first = DEVICE_MODELS.find((item) => item.kind === kind);
+      if (first) { this.selectedModelId = first.id; this.selectedUpgradeIds.clear(); }
+      this.renderPanel();
+      return;
+    }
     if (action === "select-model") {
       this.selectedModelId = id;
-      this.selectedUpgradeIds = new Set();
+      this.selectedUpgradeIds.clear();
       if (id.includes("camera")) this.selectedUpgradeIds.add("va-intrusion");
       this.renderPanel(); return;
+    }
+    if (action === "pin-compare") {
+      if (this.comparisonModelIds.has(id)) this.comparisonModelIds.delete(id);
+      else if (this.comparisonModelIds.size < 3) this.comparisonModelIds.add(id);
+      else this.toast("Comparison is limited to three products. Unpin one to add another.", "warning");
+      this.renderPanel();
+      return;
+    }
+    if (action === "toggle-upgrade") {
+      if (this.selectedUpgradeIds.has(id)) this.selectedUpgradeIds.delete(id);
+      else this.selectedUpgradeIds.add(id);
+      this.renderPanel();
+      return;
     }
     if (action === "quantity-down" || action === "quantity-up") {
       this.procurementQuantity = Math.max(1, Math.min(99, this.procurementQuantity + (action === "quantity-up" ? 1 : -1)));
@@ -613,13 +710,42 @@ export class SentinelBaseApp {
     }
     if (action === "procure") { this.feedback(procureDevice(this.state, this.selectedModelId, [...this.selectedUpgradeIds], this.procurementQuantity)); this.renderPanel(); return; }
     if (action === "approve-all-ready") { this.feedback(approveAllReady(this.state)); this.renderPanel(); return; }
-    if (action === "order-deploy") { this.placementOrderId = id; this.placementRotation = 0; this.bulldozing = false; this.panel = null; this.renderPanel(); this.updatePlacementRibbon(); return; }
+    if (action === "order-deploy") { this.placementOrderId = id; this.relocationDeviceId = null; this.placementRotation = 0; this.bulldozing = false; this.panel = null; this.renderPanel(); this.updatePlacementRibbon(); return; }
     if (action === "hire") { this.feedback(hireStaff(this.state, (target.dataset.role ?? "trooper") as StaffRole)); this.renderPanel(); return; }
     if (action === "focus-incident") { this.focusIncident(id); return; }
-    if (action === "inspect-device") { this.selectedDeviceId = id; this.openPanel("device"); return; }
+    if (action === "inspect-device") { this.selectedDeviceId = id; this.pendingDeviceUpgradeIds.clear(); this.openPanel("device"); return; }
     if (action === "focus-device") { const device = this.state.devices.find((candidate) => candidate.id === id); if (device) this.renderer.focusOn(device.x, device.y); return; }
-    if (action === "toggle-coverage") { this.showCoverage = !this.showCoverage; target.classList.toggle("active", this.showCoverage); return; }
-    if (action === "bulldoze" || action === "arm-remove") { this.bulldozing = true; this.placementOrderId = null; this.panel = null; this.renderPanel(); this.updatePlacementRibbon(); return; }
+    if (action === "toggle-coverage") { this.showCoverage = !this.showCoverage; return; }
+    if (action === "toggle-device-upgrade") {
+      if (this.pendingDeviceUpgradeIds.has(id)) this.pendingDeviceUpgradeIds.delete(id);
+      else this.pendingDeviceUpgradeIds.add(id);
+      this.renderPanel();
+      return;
+    }
+    if (action === "apply-device-upgrades") {
+      this.feedback(upgradeDevice(this.state, id, [...this.pendingDeviceUpgradeIds]));
+      this.pendingDeviceUpgradeIds.clear();
+      this.renderPanel();
+      return;
+    }
+    if (action === "arm-reposition") {
+      const device = this.state.devices.find((candidate) => candidate.id === id);
+      if (!device) return;
+      this.relocationDeviceId = id;
+      this.placementOrderId = null;
+      this.placementRotation = 0;
+      this.bulldozing = false;
+      this.panel = null;
+      this.renderPanel();
+      this.updatePlacementRibbon();
+      return;
+    }
+    if (action === "configure-drone-route") {
+      this.feedback(configureDronePatrol(this.state, id, (target.dataset.side ?? "north") as DronePatrol["side"], (target.dataset.schedule ?? "both") as DronePatrol["schedule"]));
+      this.renderPanel();
+      return;
+    }
+    if (action === "bulldoze" || action === "arm-remove") { this.bulldozing = true; this.placementOrderId = null; this.relocationDeviceId = null; this.panel = null; this.renderPanel(); this.updatePlacementRibbon(); return; }
     if (action === "save-manual") { if (this.safeBrowserSave("manual")) this.toast("Manual save complete.", "good"); return; }
     if (action === "export-save") { this.exportSave(); return; }
     if (action === "import-save") { this.importInput.click(); return; }
@@ -643,11 +769,7 @@ export class SentinelBaseApp {
       this.updateProcurementQuantity(target.value);
       return;
     }
-    const upgradeId = target.dataset.upgrade;
-    if (!upgradeId) return;
-    if (target.checked) this.selectedUpgradeIds.add(upgradeId);
-    else this.selectedUpgradeIds.delete(upgradeId);
-    this.renderPanel();
+    // Configuration selection is button-based so it cannot force the panel back to the top while scrolling.
   }
 
   private handleInput(event: Event): void {
@@ -826,6 +948,18 @@ export class SentinelBaseApp {
       }
       return;
     }
+    if (this.relocationDeviceId) {
+      const preview = this.validateRelocationPreview(this.relocationDeviceId, this.hoverTile.x, this.hoverTile.y);
+      if (!preview.ok) { this.feedback(preview); return; }
+      const result = repositionDevice(this.state, this.relocationDeviceId, this.hoverTile.x, this.hoverTile.y, this.placementFacing(this.hoverTile));
+      this.feedback(result);
+      if (result.ok) {
+        this.selectedDeviceId = this.relocationDeviceId;
+        this.relocationDeviceId = null;
+        this.openPanel("device");
+      }
+      return;
+    }
     if (this.bulldozing) {
       this.feedback(decommissionAt(this.state, this.hoverTile.x, this.hoverTile.y));
       return;
@@ -833,6 +967,7 @@ export class SentinelBaseApp {
     const device = this.renderer.deviceAt(this.state, event.clientX, event.clientY);
     if (device) {
       this.selectedDeviceId = device.id;
+      this.pendingDeviceUpgradeIds.clear();
       this.openPanel("device");
     } else {
       this.selectedDeviceId = null;
@@ -857,14 +992,17 @@ export class SentinelBaseApp {
     } else if (key === "1" || key === "2" || key === "4") this.setSpeed(Number(key));
     else if (key === "+" || key === "=") this.renderer.zoomBy(1.1);
     else if (key === "-" || key === "_") this.renderer.zoomBy(0.9);
-    else if (key === "f") this.showCoverage = !this.showCoverage;
+    else if (key === "f") {
+      this.showCoverage = !this.showCoverage;
+      document.querySelector("[data-action='toggle-coverage-menu']")?.classList.toggle("active", this.showCoverage);
+    }
     else if (key === "home") { event.preventDefault(); this.renderer.fitPerimeter(this.state.world); }
-    else if ((key === "q" || key === "e") && this.placementOrderId) {
+    else if ((key === "q" || key === "e") && (this.placementOrderId || this.relocationDeviceId)) {
       this.placementRotation = (this.placementRotation + (key === "q" ? 3 : 1)) % 4;
       this.updatePlacementRibbon();
     }
     else if (key === "escape") {
-      if (this.placementOrderId || this.bulldozing) this.cancelTool();
+      if (this.placementOrderId || this.relocationDeviceId || this.bulldozing) this.cancelTool();
       else { this.panel = null; this.renderPanel(); }
     } else if (key === "tab") {
       const first = activeIncidents(this.state)[0];
@@ -900,17 +1038,35 @@ export class SentinelBaseApp {
         placement = { modelId: order.modelId, upgradeIds: order.upgradeIds, valid: result.ok, facing: this.placementFacing(this.hoverTile) };
       }
     }
-    return { hoverTile: this.hoverTile, placement, selectedDeviceId: this.selectedDeviceId, showCoverage: this.showCoverage, bulldozing: this.bulldozing };
+    if (this.state && this.relocationDeviceId) {
+      const device = this.state.devices.find((candidate) => candidate.id === this.relocationDeviceId);
+      if (device) {
+        const result = this.hoverTile ? this.validateRelocationPreview(device.id, this.hoverTile.x, this.hoverTile.y) : { ok: false as const, reason: "Move over the map." };
+        placement = { modelId: device.modelId, upgradeIds: device.upgradeIds, valid: result.ok, facing: this.placementFacing(this.hoverTile) };
+      }
+    }
+    return { hoverTile: this.hoverTile, placement, selectedDeviceId: this.selectedDeviceId, showCoverage: this.showCoverage, coverageFilter: this.coverageFilter, bulldozing: this.bulldozing };
   }
 
   private updatePlacementRibbon(): void {
     const ribbon = document.getElementById("placement-ribbon");
     if (!ribbon || !this.state) return;
-    if (!this.placementOrderId && !this.bulldozing) { ribbon.hidden = true; return; }
+    if (!this.placementOrderId && !this.relocationDeviceId && !this.bulldozing) { ribbon.hidden = true; return; }
     ribbon.hidden = false;
     if (this.bulldozing) {
       ribbon.className = "placement-ribbon danger";
       ribbon.innerHTML = `<span class="placement-symbol">⌫</span><div><strong>Decommission tool</strong><small>Click a device to recover 20% of condition-adjusted acquisition cost.</small></div><button data-action="cancel-tool">Cancel · Esc</button>`;
+      return;
+    }
+    if (this.relocationDeviceId) {
+      const device = this.state.devices.find((candidate) => candidate.id === this.relocationDeviceId);
+      if (!device) { this.relocationDeviceId = null; ribbon.hidden = true; return; }
+      const model = getModel(device.modelId);
+      const validation = this.hoverTile ? this.validateRelocationPreview(device.id, this.hoverTile.x, this.hoverTile.y) : { ok: false as const, reason: "Move over an owned tile." };
+      const migrationCost = this.relocationPreviewCost(device);
+      ribbon.className = `placement-ribbon ${validation.ok ? "valid" : "invalid"}`;
+      const orientation = model.kind === "camera" && !device.upgradeIds.includes("panoramic") ? ` · facing ${facingLabel(this.placementFacing(this.hoverTile))} · Q/E rotate` : "";
+      ribbon.innerHTML = `<span class="placement-symbol">${deviceGlyph(model.kind)}</span><div><strong>Reposition ${escapeHtml(device.name)}</strong><small>${validation.ok ? `Migration quote ${formatMoney(migrationCost)} · sector ${this.hoverTile?.x}.${this.hoverTile?.y}${orientation}` : escapeHtml(validation.reason)}</small></div><button data-action="cancel-tool">Cancel · Esc</button>`;
       return;
     }
     const order = this.state.orders.find((candidate) => candidate.id === this.placementOrderId);
@@ -924,6 +1080,7 @@ export class SentinelBaseApp {
 
   private cancelTool(): void {
     this.placementOrderId = null;
+    this.relocationDeviceId = null;
     this.placementRotation = 0;
     this.bulldozing = false;
     this.updatePlacementRibbon();
@@ -932,6 +1089,20 @@ export class SentinelBaseApp {
   private placementFacing(tile: { x: number; y: number } | null): number {
     if (!tile) return this.placementRotation * Math.PI / 2;
     return Math.atan2(tile.y + 0.5 - 50, tile.x + 0.5 - 50) + this.placementRotation * Math.PI / 2;
+  }
+
+  private validateRelocationPreview(deviceId: string, x: number, y: number): ActionResult {
+    if (!this.state) return { ok: false, reason: "No active operation." };
+    const device = this.state.devices.find((candidate) => candidate.id === deviceId);
+    if (!device) return { ok: false, reason: "That asset is no longer available." };
+    if (device.status !== "operational") return { ok: false, reason: "Only an operational asset can be repositioned." };
+    if (this.state.incidents.some((incident) => incident.status === "responding" && incident.assignedResponderId === device.id)) return { ok: false, reason: `${device.name} is assigned to an active response and cannot be repositioned yet.` };
+    if (Math.round(device.x) === x && Math.round(device.y) === y) return { ok: false, reason: "Choose a different destination tile." };
+    return validateDevicePlacement(this.state, deviceId, x, y);
+  }
+
+  private relocationPreviewCost(device: Device): number {
+    return Math.max(2_000, Math.round(configuredStats(device.modelId, device.upgradeIds).purchaseCost * 0.05));
   }
 
   private focusIncident(id: string): void {
@@ -1081,6 +1252,7 @@ function deviceGlyph(kind: string): string {
   if (kind === "lidar") return "⌁";
   if (kind === "robot") return "♞";
   if (kind === "drone") return "✣";
+  if (kind === "access-control") return "▣";
   return "☀";
 }
 
@@ -1097,7 +1269,7 @@ function stageLabel(stage: string): string {
 function panelTitle(panel: Exclude<Panel, null>): string {
   const titles: Record<Exclude<Panel, null>, string> = {
     capability: "Capability builder", pipeline: "Autonomous delivery", operations: "Autonomous C2", staff: "People & shifts",
-    finance: "Finance & ledger", rating: "Base security capability", objectives: "Command objectives", settings: "Save & settings", device: "Device inspector",
+    finance: "Finance & ledger", rating: "Overall score", objectives: "Command objectives", settings: "Save & settings", device: "Device inspector",
   };
   return titles[panel];
 }
@@ -1166,4 +1338,66 @@ function ratingNarrative(score: number): string {
   if (score >= 45) return "Core systems are integrated. Blind sectors or operating pressure still constrain confidence.";
   if (score >= 25) return "Basic coverage exists, but command cannot yet rely on a complete detection-to-response chain.";
   return "The base is fragile. Deliver tested coverage and staff every critical response role.";
+}
+
+type DesirabilityValues = {
+  cost: number;
+  capability: number;
+  availability: number;
+  scalability: number;
+  interoperability: number;
+  leadTime: number;
+};
+
+function kindLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    camera: "Cameras", lidar: "LiDAR", drone: "Drones", robot: "Robots", lighting: "Floodlights", "access-control": "Access control",
+  };
+  return labels[kind] ?? titleCase(kind);
+}
+
+function coverageLegendItem(kind: string, label: string): string {
+  return `<span class="legend-item ${kind}"><i>${deviceGlyph(kind)}</i>${escapeHtml(label)}</span>`;
+}
+
+function coverageFilterItems(selected: CoverageFilter): string[] {
+  const filters: Array<[CoverageFilter, string]> = [
+    ["all", "All capabilities"], ["camera", "Cameras"], ["lidar", "LiDAR"], ["drone", "Drones"], ["robot", "Robots"], ["lighting", "Floodlights"], ["access-control", "Access control"],
+  ];
+  return filters.map(([filter, label]) => `<button class="${filter === selected ? "selected" : ""}" data-action="coverage-filter" data-filter="${filter}" role="menuitemradio" aria-checked="${filter === selected}"><i class="coverage-dot ${filter}"></i>${label}</button>`);
+}
+
+function desirabilityBars(attributes: DesirabilityValues, cost: number, leadHours: number, compact = false): string {
+  const values: Array<[keyof DesirabilityValues, string, string]> = [
+    ["cost", "Cost", formatMoney(cost)], ["capability", "Capability", ""], ["availability", "Availability", ""],
+    ["scalability", "Scalability", ""], ["interoperability", "Interoperability", ""], ["leadTime", "Lead time", `${leadHours}h`],
+  ];
+  return `<div class="desirability-bars ${compact ? "compact" : ""}" title="All bars show desirability, not raw magnitude. Longer Cost and Lead Time bars mean lower cost and shorter lead time.">${values.map(([key, label, actual]) => {
+    const score = Math.max(1, Math.min(10, Math.round(attributes[key])));
+    return `<div class="desirability-row ${key === "cost" || key === "leadTime" ? "reverse" : ""}"><span><b>${label}</b><em>${actual || `${score}/10`}</em></span><i>${Array.from({ length: 10 }, (_, index) => `<u class="${index < score ? "filled" : ""}"></u>`).join("")}</i></div>`;
+  }).join("")}</div>`;
+}
+
+function overallMetricCard(label: string, value: string, score: number, copy: string, inverse = false): string {
+  const safeScore = Math.max(0, Math.min(100, score));
+  return `<div class="overall-metric ${inverse ? "inverse" : ""}"><span>${label}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(copy)}</small><progress class="${inverse ? "inverted" : ""}" max="100" value="${safeScore}">${safeScore}</progress></div>`;
+}
+
+function inverseMinutesScore(minutes: number, target: number): number {
+  if (!Number.isFinite(minutes) || minutes <= 0) return 50;
+  return Math.max(0, Math.min(100, 100 - (minutes / target) * 100));
+}
+
+function inverseCountScore(count: number): number {
+  return Math.max(0, Math.min(100, 100 - Math.max(0, count) * 25));
+}
+
+function preventionScore(count: number): number {
+  return Math.max(0, Math.min(100, 35 + Math.max(0, count) * 11));
+}
+
+function formatMinutes(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "—";
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  return `${(minutes / 60).toFixed(minutes >= 600 ? 0 : 1)} h`;
 }

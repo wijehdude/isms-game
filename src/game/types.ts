@@ -1,10 +1,10 @@
 export type TerrainSurface = "grass" | "sand" | "dirt" | "rock" | "water";
 export type Ownership = "owned" | "purchasable" | "off-limits";
 export type WeatherKind = "clear" | "overcast" | "rain" | "storm" | "fog";
-export type DeviceKind = "camera" | "lidar" | "robot" | "drone" | "lighting";
+export type DeviceKind = "camera" | "lidar" | "robot" | "drone" | "lighting" | "access-control";
 export type StaffRole = "trooper" | "operator" | "engineer";
 export type OrderStage = "procurement" | "integration-review" | "integrating" | "factory-test" | "testing" | "ready";
-export type DeviceStatus = "awaiting-sat" | "commissioning" | "operational" | "fault";
+export type DeviceStatus = "awaiting-sat" | "commissioning" | "operational" | "fault" | "upgrading" | "relocating";
 export type IncidentStatus = "new" | "verifying" | "verified" | "responding" | "resolved" | "dismissed" | "missed";
 export type IncidentType = "intrusion" | "loitering" | "suspicious-object" | "tamper" | "system-fault" | "false-alarm";
 export type IntruderPhase = "infiltrating" | "exfiltrating" | "caught" | "escaped";
@@ -12,6 +12,50 @@ export type ScenarioStatus = "active" | "won" | "lost";
 export type StructureType = "building" | "fence" | "road" | "walkway" | "parade" | "track" | "gate" | "drone-pad";
 
 export type Point = { x: number; y: number };
+
+/**
+ * A 1–10 desirability score used by the catalogue's compact comparison bars.
+ * Cost and leadTime are already reverse scored: a longer bar is always better.
+ */
+export type DesirabilityAttributes = {
+  cost: number;
+  capability: number;
+  availability: number;
+  scalability: number;
+  interoperability: number;
+  leadTime: number;
+};
+
+export type QuoteBreakdown = {
+  baseEquipmentCost: number;
+  upgradeCost: number;
+  capabilityFactor: number;
+  availabilityFactor: number;
+  scalabilityFactor: number;
+  interoperabilityFactor: number;
+  urgencyFactor: number;
+  vendorMarkup: number;
+  equipmentCost: number;
+  totalPurchaseCost: number;
+};
+
+export type VendorComparison = {
+  model: DeviceModel;
+  vendor: string;
+  attributes: DesirabilityAttributes;
+  cost: number;
+  leadHours: number;
+  quote: QuoteBreakdown;
+};
+
+export type UpgradeComparison = {
+  upgrade: Upgrade;
+  vendor: string;
+  attributes: DesirabilityAttributes;
+  cost: number;
+  leadHours: number;
+  urgencyFactor: number;
+};
 
 export type WorldState = {
   width: number;
@@ -52,6 +96,14 @@ export type DeviceModel = {
   monthlyOps: number;
   responsePower: number;
   allowedTerrain: "flat" | "all";
+  /** Vendor-facing data, kept explicit so products can be compared without hidden rules. */
+  vendor: string;
+  vendorMarkup: number;
+  capabilityFactor: number;
+  availabilityFactor: number;
+  scalabilityFactor: number;
+  interoperabilityFactor: number;
+  attributes: DesirabilityAttributes;
 };
 
 export type Upgrade = {
@@ -69,11 +121,17 @@ export type Upgrade = {
   fogFactor?: number;
   responsePower?: number;
   integrationComplexity?: number;
+  /** Small programme lead, in hours, needed for the product comparison card. */
+  leadHours?: number;
+  vendor?: string;
+  vendorMarkup?: number;
+  attributes: DesirabilityAttributes;
 };
 
 export type ConfiguredStats = {
   purchaseCost: number;
   totalProgrammeCost: number;
+  quote: QuoteBreakdown;
   range: number;
   accuracy: number;
   falseAlarmRate: number;
@@ -97,6 +155,16 @@ export type ProcurementOrder = {
   quotedCost: number;
   /** Shared identifier for units placed in the same bulk purchase. */
   batchId?: string;
+  /** Programme-plan date used to score on-time commissioning. */
+  plannedOperationalAt?: number;
+  /** Set when a queued drone is waiting for a central pad berth. */
+  capacityNotified?: boolean;
+};
+
+export type DronePatrol = {
+  side: "north" | "east" | "south" | "west";
+  schedule: "day" | "night" | "both";
+  waypointIndex: number;
 };
 
 export type Device = {
@@ -118,6 +186,12 @@ export type Device = {
   homeY?: number;
   assignedIncidentId?: string | null;
   path?: Point[];
+  /** Ordered module IDs being fitted while the device is temporarily unavailable. */
+  pendingUpgradeIds?: string[];
+  /** Programme-plan milestone inherited from the purchase order. */
+  plannedOperationalAt?: number;
+  /** Drones patrol a selected fenceline side during the configured shift. */
+  dronePatrol?: DronePatrol;
 };
 
 export type StaffMember = {
@@ -171,12 +245,19 @@ export type Incident = {
   resolution: string | null;
   /** Set when a fully hardened perimeter supplies assured evidence and response. */
   assuredResponse?: boolean;
+  /** Operational measurement timestamps. They are optional for legacy in-memory fixtures. */
+  detectedAt?: number;
+  verifiedAt?: number;
+  respondedAt?: number;
+  resolvedAt?: number;
+  /** An intruder intercepted before reaching its target counts as a prevented threat. */
+  prevented?: boolean;
 };
 
 export type LedgerEntry = {
   id: string;
   minute: number;
-  category: "funding" | "procurement" | "integration" | "testing" | "commissioning" | "payroll" | "operations" | "loss" | "savings" | "refund" | "recruitment";
+  category: "funding" | "procurement" | "integration" | "testing" | "commissioning" | "payroll" | "operations" | "loss" | "savings" | "refund" | "recruitment" | "upgrade" | "relocation";
   description: string;
   amount: number;
 };
@@ -192,6 +273,10 @@ export type EconomyState = {
 };
 
 export type RatingState = {
+  /** Command-facing 0–100 score, balancing performance, risk, cost and schedule. */
+  overallScore: number;
+  overallMetrics: OverallMetrics;
+  /** Backward-compatible alias for Overall Score, used by scenario objective plumbing. */
   campRating: number;
   securityEffectiveness: number;
   peopleWellbeing: number;
@@ -218,6 +303,37 @@ export type RatingState = {
   responseReadiness: number;
 };
 
+export type OverallMetrics = {
+  performance: number;
+  risk: number;
+  cost: number;
+  schedule: number;
+  incidentDetectionRate: number;
+  falseAlarmRate: number;
+  meanTimeToDetect: number;
+  meanTimeToRespond: number;
+  successfulIncidentClosures: number;
+  missedIntrusions: number;
+  perimeterSecurityScore: number;
+  threatsPrevented: number;
+  cashRunway: number;
+  scheduleAdherence: number;
+};
+
+/** Cumulative operational evidence used by Overall Score calculations. */
+export type OperationalMetricsState = {
+  realIncidents: number;
+  detectedRealIncidents: number;
+  falseAlarmEvents: number;
+  detectionSamples: number;
+  totalDetectionMinutes: number;
+  responseSamples: number;
+  totalResponseMinutes: number;
+  successfulClosures: number;
+  missedIntrusions: number;
+  threatsPrevented: number;
+};
+
 export type AutomationState = {
   /** Automatically approves ICD, FAT and SAT gates when funds permit. */
   lifecycleAutopilot: boolean;
@@ -232,6 +348,7 @@ export type WeatherState = {
   nextChangeAt: number;
 };
 
+/** `rating` means the command-facing Overall Score. */
 export type ObjectiveMetric = "rating" | "coverage" | "caught" | "cash" | "operatorHappiness" | "trooperHappiness";
 
 export type ScenarioObjective = {
@@ -276,7 +393,7 @@ export type GameMessage = {
 };
 
 export type GameState = {
-  version: 2;
+  version: 3;
   idCounter: number;
   seed: number;
   rngState: number;
@@ -301,6 +418,7 @@ export type GameState = {
   incidents: Incident[];
   economy: EconomyState;
   rating: RatingState;
+  metrics: OperationalMetricsState;
   automation: AutomationState;
   tutorial: TutorialState;
   messages: GameMessage[];

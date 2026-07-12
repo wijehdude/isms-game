@@ -1,6 +1,8 @@
 import type { GameState } from "../game/types";
 
-const SAVE_KEY = "sentinel-base.saves.v2";
+const SAVE_KEY = "sentinel-base.saves.v3";
+const LEGACY_SAVE_KEYS = ["parkwright.camp-overwatch.saves.v1", "sentinel-base.saves.v2"] as const;
+const UNSUPPORTED_SAVE_MESSAGE = "This file is not a supported Sentinel Base v3 save. Sentinel Base v1 and v2 saves start fresh.";
 
 export type SaveSlot = {
   id: "autosave" | "manual";
@@ -16,7 +18,7 @@ export function serializeState(state: GameState): string {
 
 export function deserializeState(serialized: string): GameState {
   const parsed: unknown = JSON.parse(serialized);
-  if (!isGameState(parsed)) throw new Error("This file is not a supported Sentinel Base v2 save.");
+  if (!isGameState(parsed)) throw new Error(UNSUPPORTED_SAVE_MESSAGE);
   return parsed;
 }
 
@@ -29,7 +31,7 @@ function isGameState(value: unknown): value is GameState {
   const weather = asRecord(record.weather);
   const tutorial = asRecord(record.tutorial);
   const automation = asRecord(record.automation);
-  return record.version === 2
+  return record.version === 3
     && typeof record.campName === "string"
     && typeof record.scenarioId === "string"
     && typeof record.totalMinutes === "number" && Number.isFinite(record.totalMinutes)
@@ -37,10 +39,12 @@ function isGameState(value: unknown): value is GameState {
     && typeof record.rngState === "number" && typeof record.idCounter === "number"
     && typeof record.lastWeeklyFundingUpdate === "number" && Number.isFinite(record.lastWeeklyFundingUpdate)
     && economy !== null && typeof economy.cash === "number" && Array.isArray(economy.ledger)
-    && rating !== null && typeof rating.campRating === "number" && typeof rating.capabilityPoints === "number"
+    && rating !== null && typeof rating.campRating === "number" && typeof rating.overallScore === "number"
+    && asRecord(rating.overallMetrics) !== null && typeof rating.capabilityPoints === "number"
     && typeof rating.securityHealth === "number" && typeof rating.cognitiveLoad === "number"
     && typeof rating.detectionFusion === "number" && typeof rating.responseReadiness === "number"
     && automation !== null && typeof automation.lifecycleAutopilot === "boolean" && typeof automation.incidentResponse === "boolean"
+    && asRecord(record.metrics) !== null && typeof asRecord(record.metrics)?.realIncidents === "number"
     && world !== null && typeof world.width === "number" && typeof world.height === "number"
     && Array.isArray(world.tiles) && Array.isArray(world.paths) && Array.isArray(world.structures)
     && weather !== null && typeof weather.kind === "string" && typeof weather.nextChangeAt === "number"
@@ -56,11 +60,18 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 export function listSaves(): SaveSlot[] {
   if (typeof localStorage === "undefined") return [];
   try {
+    retireLegacyBrowserSaves();
     const parsed = JSON.parse(localStorage.getItem(SAVE_KEY) ?? "[]") as unknown;
     return Array.isArray(parsed) ? parsed.filter(isSaveSlot) : [];
   } catch {
     return [];
   }
+}
+
+/** Selected fresh-start policy: previous Sentinel Base and Parkwright browser saves are retired. */
+export function retireLegacyBrowserSaves(): void {
+  if (typeof localStorage === "undefined") return;
+  for (const key of LEGACY_SAVE_KEYS) localStorage.removeItem(key);
 }
 
 export function saveToBrowser(state: GameState, id: SaveSlot["id"]): SaveSlot {

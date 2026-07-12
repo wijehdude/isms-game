@@ -4,7 +4,7 @@ import { configuredStats, getModel, hasAutomaticAnalytics } from "../game/catalo
 import { nextId } from "../game/createGame";
 import { getScenario } from "../game/scenarios";
 import type { Device, GameState, Incident, Intruder, Point, WeatherKind } from "../game/types";
-import { activeIncidents, approveAllReady, dispatchIncident, onDutyStaff, pushMessage, verifyIncident } from "../game/actions";
+import { activeIncidents, approveAllReady, autoDeployReadyDrones, dispatchIncident, onDutyStaff, pushMessage, verifyIncident } from "../game/actions";
 import { closeMonth, closeWeek, MINUTES_PER_WEEK, postLedger } from "./economy";
 import { clamp, isHardenedPerimeter, recalculateRating } from "./rating";
 import { findPath } from "../world/pathfinding";
@@ -90,6 +90,9 @@ function advanceProjects(state: GameState): boolean {
     }
   }
 
+  // Drones are based, rather than map-placed, as soon as their factory acceptance closes.
+  if (autoDeployReadyDrones(state)) changed = true;
+
   for (const device of state.devices) {
     if (device.readyAt <= 0 || device.readyAt > state.totalMinutes) continue;
     if (device.status === "commissioning") {
@@ -98,6 +101,18 @@ function advanceProjects(state: GameState): boolean {
       device.commissionedAt = state.totalMinutes;
       state.tutorial.commissioned = true;
       pushMessage(state, "Capability operational", `${device.name} passed site acceptance and now contributes full coverage.`, "good");
+      changed = true;
+    } else if (device.status === "upgrading") {
+      device.upgradeIds = [...(device.pendingUpgradeIds ?? device.upgradeIds)];
+      delete device.pendingUpgradeIds;
+      device.status = "operational";
+      device.readyAt = 0;
+      pushMessage(state, "Asset upgrade complete", `${device.name} passed its updated ICD mapping and factory acceptance; it is back in service.`, "good");
+      changed = true;
+    } else if (device.status === "relocating") {
+      device.status = "operational";
+      device.readyAt = 0;
+      pushMessage(state, "Asset relocation complete", `${device.name} has completed migration and recommissioning at its new sector.`, "good");
       changed = true;
     } else if (device.status === "fault") {
       device.status = "operational";
@@ -178,6 +193,7 @@ function spawnIntruder(state: GameState): void {
     detected: false, spawnedAt: state.totalMinutes, lossValue: type === "scout" ? 22_000 : type === "thief" ? 58_000 : 91_000,
     path: [],
   });
+  state.metrics.realIncidents += 1;
 }
 
 function createFalseAlarm(state: GameState, device: Device): void {
@@ -189,6 +205,7 @@ function createFalseAlarm(state: GameState, device: Device): void {
     createdAt: state.totalMinutes, deadlineAt: state.totalMinutes + 210, readyAt: 0, assignedResponderId: null, resolution: null,
   };
   device.falseAlarms += 1;
+  state.metrics.falseAlarmEvents += 1;
   state.incidents.push(incident);
   pushMessage(state, "C2 alarm requires validation", `${incidentLabel(type)} at sector ${Math.round(incident.x)}.${Math.round(incident.y)} · ${Math.round(incident.confidence * 100)}% confidence.`, "warning");
 }
@@ -207,6 +224,7 @@ function moveAndDetectIntruders(state: GameState, deltaMinutes: number): void {
       } else {
         intruder.phase = "escaped";
         state.rating.escaped += 1;
+        state.metrics.missedIntrusions += 1;
         state.rating.capabilityPoints = Math.max(0, state.rating.capabilityPoints - 500);
         state.economy.stolenLosses += intruder.lossValue;
         postLedger(state, "loss", `${intruder.type} escaped with camp property`, -intruder.lossValue);
@@ -227,11 +245,16 @@ function detectIntruder(state: GameState, intruder: Intruder, deltaMinutes: numb
   let candidates = state.devices.filter((device) => {
     if (device.status !== "operational") return false;
     const kind = getModel(device.modelId).kind;
+    if (kind === "drone" && !device.assignedIncidentId && !isDronePatrolActive(state, device)) return false;
     return kind !== "lighting" && Math.hypot(device.x - intruder.x, device.y - intruder.y) <= configuredStats(device.modelId, device.upgradeIds).range;
   });
   if (candidates.length === 0 && hardenedPerimeter) {
     candidates = state.devices
-      .filter((device) => device.status === "operational" && getModel(device.modelId).kind !== "lighting")
+      .filter((device) => {
+        if (device.status !== "operational") return false;
+        const kind = getModel(device.modelId).kind;
+        return kind !== "lighting" && (kind !== "drone" || Boolean(device.assignedIncidentId) || isDronePatrolActive(state, device));
+      })
       .sort((a, b) => Math.hypot(a.x - intruder.x, a.y - intruder.y) - Math.hypot(b.x - intruder.x, b.y - intruder.y))
       .slice(0, 2);
   }
@@ -275,6 +298,12 @@ function detectIntruder(state: GameState, intruder: Intruder, deltaMinutes: numb
 
   intruder.detected = true;
   sources.forEach((device) => { device.detections += 1; });
+  const firstDetection = !state.incidents.some((incident) => incident.genuine && incident.type === "intrusion" && incident.intruderId === intruder.id);
+  if (firstDetection) {
+    state.metrics.detectedRealIncidents += 1;
+    state.metrics.detectionSamples += 1;
+    state.metrics.totalDetectionMinutes += Math.max(0, state.totalMinutes - intruder.spawnedAt);
+  }
   const confidence = hardenedPerimeter
     ? 0.99
     : clamp(1 - combinedMiss + sources.length * 0.1 + Math.max(0, sourceKinds.size - 1) * 0.08, 0.35, 0.96);
@@ -283,6 +312,7 @@ function detectIntruder(state: GameState, intruder: Intruder, deltaMinutes: numb
     sourceDeviceIds: sources.map((device) => device.id), intruderId: intruder.id, createdAt: state.totalMinutes,
     deadlineAt: state.totalMinutes + 190, readyAt: 0, assignedResponderId: null, resolution: null,
     assuredResponse: hardenedPerimeter,
+    detectedAt: state.totalMinutes,
   });
   pushMessage(state, "Potential intrusion", `${sources.length} sensor${sources.length === 1 ? "" : "s"} reported movement at sector ${Math.round(intruder.x)}.${Math.round(intruder.y)} · ${Math.round(confidence * 100)}% confidence.`, "danger");
 }
@@ -324,6 +354,7 @@ function advanceIncidents(state: GameState): boolean {
         pushMessage(state, "Fault acknowledged", incident.resolution, "warning");
       } else if (incident.genuine) {
         incident.status = "verified";
+        incident.verifiedAt = state.totalMinutes;
         incident.resolution = "Evidence supports a genuine security event. Dispatch is required.";
         pushMessage(state, "Alarm verified", `Operator confirmed ${incidentLabel(incident.type)} at sector ${Math.round(incident.x)}.${Math.round(incident.y)}.`, "danger");
       } else {
@@ -378,19 +409,29 @@ function resolveResponse(state: GameState, incident: Incident): void {
   const success = incident.assuredResponse === true || nextRandom(state) < power;
   if (success) {
     incident.status = "resolved";
+    incident.resolvedAt = state.totalMinutes;
     incident.resolution = incident.genuine ? "Subject intercepted and escorted for investigation." : "Benign cause confirmed in the field.";
     state.rating.alarmsResolved += 1;
     state.rating.capabilityPoints += incident.genuine ? 350 : 80;
     state.tutorial.resolvedAlarm = true;
     const intruder = state.intruders.find((candidate) => candidate.id === incident.intruderId);
     if (intruder) {
+      const prevented = intruder.phase === "infiltrating";
       intruder.phase = "caught";
       state.rating.caught += 1;
       state.economy.avoidedLosses += intruder.lossValue;
+      if (incident.genuine && incident.type === "intrusion") {
+        state.metrics.successfulClosures += 1;
+        if (prevented) {
+          incident.prevented = true;
+          state.metrics.threatsPrevented += 1;
+        }
+      }
     }
     pushMessage(state, "Incident resolved", incident.resolution, "good");
   } else {
     incident.status = "missed";
+    incident.resolvedAt = state.totalMinutes;
     incident.resolution = "The response searched the sector but lost contact with the subject.";
     state.rating.capabilityPoints = Math.max(0, state.rating.capabilityPoints - 180);
     const intruder = state.intruders.find((candidate) => candidate.id === incident.intruderId);
@@ -440,13 +481,44 @@ function moveMobileDevices(state: GameState, deltaMinutes: number): void {
       if (model.kind === "drone") moveToward(device, target, deltaMinutes * speed);
       else moveAlongPath(state, device, target, deltaMinutes * speed, (x, y) => isTileBlocked(state.world, x, y));
     } else if (model.kind === "drone") {
-      const angle = (state.totalMinutes / 55) % (Math.PI * 2);
-      const patrol = { x: home.x + Math.cos(angle) * 4, y: home.y + Math.sin(angle) * 4 };
-      moveToward(device, patrol, deltaMinutes * 0.18);
+      const patrol = ensureDronePatrol(device);
+      if (isDronePatrolActive(state, device)) {
+        const route = dronePatrolRoute(patrol.side);
+        let target = route[patrol.waypointIndex % route.length] ?? route[0] ?? home;
+        if (Math.hypot(device.x - target.x, device.y - target.y) < 0.35) {
+          patrol.waypointIndex = (patrol.waypointIndex + 1) % route.length;
+          target = route[patrol.waypointIndex] ?? route[0] ?? home;
+        }
+        // Flight speed is intentionally below dispatch sprint speed so players can see the route.
+        moveToward(device, target, deltaMinutes * (0.28 + power * 0.18));
+      } else {
+        moveToward(device, home, deltaMinutes * (0.3 + power * 0.16));
+      }
     } else {
       moveAlongPath(state, device, home, deltaMinutes * 0.12, (x, y) => isTileBlocked(state.world, x, y));
     }
   }
+}
+
+function ensureDronePatrol(device: Device): NonNullable<Device["dronePatrol"]> {
+  if (!device.dronePatrol) device.dronePatrol = { side: "north", schedule: "both", waypointIndex: 0 };
+  return device.dronePatrol;
+}
+
+function isDronePatrolActive(state: GameState, device: Device): boolean {
+  if (state.weather.kind === "storm") return false;
+  const patrol = ensureDronePatrol(device);
+  if (patrol.schedule === "both") return true;
+  const hour = calendarFromMinutes(state.totalMinutes).hour;
+  const day = hour >= 6 && hour < 18;
+  return patrol.schedule === "day" ? day : !day;
+}
+
+function dronePatrolRoute(side: NonNullable<Device["dronePatrol"]>["side"]): Point[] {
+  if (side === "north") return [{ x: 24, y: 21 }, { x: 76, y: 21 }];
+  if (side === "east") return [{ x: 78, y: 24 }, { x: 78, y: 76 }];
+  if (side === "south") return [{ x: 76, y: 78 }, { x: 24, y: 78 }];
+  return [{ x: 21, y: 76 }, { x: 21, y: 24 }];
 }
 
 function runDailyUpdate(state: GameState): void {

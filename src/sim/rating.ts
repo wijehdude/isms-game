@@ -1,5 +1,6 @@
 import { configuredStats, getModel } from "../game/catalog";
-import type { GameState } from "../game/types";
+import type { GameState, OverallMetrics } from "../game/types";
+import { projectedMonthlyCosts } from "./economy";
 
 export function clamp(value: number, min = 0, max = 100): number {
   return Math.max(min, Math.min(max, value));
@@ -26,7 +27,7 @@ export function isHardenedPerimeter(state: GameState): boolean {
 }
 
 function calculateCoverage(state: GameState): number {
-  const devices = state.devices.filter((device) => device.status === "operational" && ["camera", "lidar", "drone", "robot"].includes(getModel(device.modelId).kind));
+  const devices = state.devices.filter((device) => device.status === "operational" && ["camera", "lidar", "drone", "robot", "access-control"].includes(getModel(device.modelId).kind));
   if (devices.length === 0) return 0;
   let covered = 0;
   let sampled = 0;
@@ -131,6 +132,113 @@ function calculateResponseReadiness(state: GameState, cognitiveLoad: number): nu
   return clamp(readiness);
 }
 
+type Evidence = {
+  realIncidents: number;
+  detectedRealIncidents: number;
+  falseAlarmEvents: number;
+  detectionSamples: number;
+  totalDetectionMinutes: number;
+  responseSamples: number;
+  totalResponseMinutes: number;
+  successfulClosures: number;
+  missedIntrusions: number;
+  threatsPrevented: number;
+};
+
+/**
+ * Metrics are maintained by the simulation. The incident/rating fallbacks make
+ * handcrafted test states and a just-upgraded game behave sensibly too.
+ */
+function evidenceFor(state: GameState): Evidence {
+  const genuine = state.incidents.filter((incident) => incident.genuine);
+  const detectedFromIncidents = genuine.filter((incident) => incident.detectedAt !== undefined || incident.sourceDeviceIds.length > 0).length;
+  const falseFromIncidents = state.incidents.filter((incident) => !incident.genuine).length;
+  const detectedSamples = state.incidents.filter((incident) => incident.detectedAt !== undefined).map((incident) => (incident.detectedAt ?? incident.createdAt) - incident.createdAt);
+  const responseSamples = state.incidents.filter((incident) => incident.respondedAt !== undefined).map((incident) => (incident.respondedAt ?? incident.createdAt) - incident.createdAt);
+  const preventedFromIncidents = genuine.filter((incident) => incident.prevented).length;
+  return {
+    realIncidents: Math.max(state.metrics.realIncidents, genuine.length),
+    detectedRealIncidents: Math.max(state.metrics.detectedRealIncidents, detectedFromIncidents),
+    falseAlarmEvents: Math.max(state.metrics.falseAlarmEvents, falseFromIncidents, state.rating.falseAlarms),
+    detectionSamples: Math.max(state.metrics.detectionSamples, detectedSamples.length),
+    totalDetectionMinutes: Math.max(state.metrics.totalDetectionMinutes, detectedSamples.reduce((sum, value) => sum + Math.max(0, value), 0)),
+    responseSamples: Math.max(state.metrics.responseSamples, responseSamples.length),
+    totalResponseMinutes: Math.max(state.metrics.totalResponseMinutes, responseSamples.reduce((sum, value) => sum + Math.max(0, value), 0)),
+    successfulClosures: Math.max(state.metrics.successfulClosures, state.rating.caught),
+    missedIntrusions: Math.max(state.metrics.missedIntrusions, state.rating.escaped),
+    threatsPrevented: Math.max(state.metrics.threatsPrevented, preventedFromIncidents),
+  };
+}
+
+function scheduleAdherence(state: GameState): number {
+  const milestones = [
+    ...state.devices
+      .filter((device) => device.plannedOperationalAt !== undefined)
+      .map((device) => ({ plannedAt: device.plannedOperationalAt ?? state.totalMinutes, actualAt: device.commissionedAt })),
+    ...state.orders
+      .filter((order) => order.plannedOperationalAt !== undefined)
+      .map((order) => ({ plannedAt: order.plannedOperationalAt ?? state.totalMinutes, actualAt: null })),
+  ];
+  if (milestones.length === 0) return 65;
+  const score = milestones.reduce((sum, milestone) => {
+    const observedAt = milestone.actualAt ?? state.totalMinutes;
+    const delayMinutes = Math.max(0, observedAt - milestone.plannedAt);
+    // A one-week delay consumes the full punctuality score for that milestone.
+    return sum + clamp(100 - (delayMinutes / (7 * 24 * 60)) * 100);
+  }, 0) / milestones.length;
+  return clamp(score);
+}
+
+function overallMetricsFor(
+  state: GameState,
+  securityHealth: number,
+  costEffectiveness: number,
+  schedule: number,
+): OverallMetrics {
+  const evidence = evidenceFor(state);
+  const real = evidence.realIncidents;
+  const alarms = evidence.detectedRealIncidents + evidence.falseAlarmEvents;
+  // No-history values deliberately score neutral, never as a free perfect record.
+  const incidentDetectionRate = real === 0 ? 50 : clamp((evidence.detectedRealIncidents / real) * 100);
+  const falseAlarmRate = alarms === 0 ? 50 : clamp((evidence.falseAlarmEvents / alarms) * 100);
+  const meanTimeToDetect = evidence.detectionSamples === 0 ? 0 : evidence.totalDetectionMinutes / evidence.detectionSamples;
+  const meanTimeToRespond = evidence.responseSamples === 0 ? 0 : evidence.totalResponseMinutes / evidence.responseSamples;
+  const detectionSpeed = evidence.detectionSamples === 0 ? 50 : clamp(100 - (meanTimeToDetect / 60) * 100);
+  const responseSpeed = evidence.responseSamples === 0 ? 50 : clamp(100 - (meanTimeToRespond / 90) * 100);
+  const closureDenominator = evidence.successfulClosures + evidence.missedIntrusions;
+  const successfulIncidentClosures = closureDenominator === 0 ? 50 : clamp((evidence.successfulClosures / closureDenominator) * 100);
+  const preventionRate = real === 0 ? 50 : clamp((evidence.threatsPrevented / real) * 100);
+  const performance = clamp(
+    incidentDetectionRate * 0.26
+      + (100 - falseAlarmRate) * 0.14
+      + detectionSpeed * 0.14
+      + responseSpeed * 0.14
+      + successfulIncidentClosures * 0.2
+      + preventionRate * 0.12,
+  );
+  const missedIntrusionScore = real === 0 ? 50 : clamp(100 - (evidence.missedIntrusions / real) * 100);
+  const risk = clamp(securityHealth * 0.68 + missedIntrusionScore * 0.32);
+  const monthlyCost = projectedMonthlyCosts(state).total;
+  const cashRunway = monthlyCost <= 0 ? 100 : clamp((state.economy.cash / (monthlyCost * 12)) * 100);
+  const cost = clamp(costEffectiveness * 0.6 + cashRunway * 0.4);
+  return {
+    performance: Math.round(performance),
+    risk: Math.round(risk),
+    cost: Math.round(cost),
+    schedule: Math.round(schedule),
+    incidentDetectionRate: Math.round(incidentDetectionRate),
+    falseAlarmRate: Math.round(falseAlarmRate),
+    meanTimeToDetect: Math.round(meanTimeToDetect),
+    meanTimeToRespond: Math.round(meanTimeToRespond),
+    successfulIncidentClosures: Math.round(successfulIncidentClosures),
+    missedIntrusions: evidence.missedIntrusions,
+    perimeterSecurityScore: Math.round(securityHealth),
+    threatsPrevented: evidence.threatsPrevented,
+    cashRunway: Math.round(cashRunway),
+    scheduleAdherence: Math.round(schedule),
+  };
+}
+
 export function recalculateRating(state: GameState, awardDailyPoints = false): void {
   const operational = state.devices.filter((device) => device.status === "operational");
   const commissioned = state.devices.filter((device) => device.commissionedAt !== null);
@@ -158,7 +266,6 @@ export function recalculateRating(state: GameState, awardDailyPoints = false): v
   const staffReadiness = Math.min(1, troopers.length / 3) * 0.5 + Math.min(1, operators.length / 3) * 0.35 + Math.min(1, state.staff.filter((member) => member.role === "engineer").length) * 0.15;
   const assetReadiness = allAssets === 0 ? 0 : operational.length / allAssets;
   const readiness = clamp((assetReadiness * 0.65 + staffReadiness * 0.35) * 100);
-  const scheduleConfidence = state.scenarioStatus === "active" ? clamp(55 + readiness * 0.3 - state.orders.length * 1.5) : 100;
   const cognitiveLoad = calculateCognitiveLoad(state);
   const responseReadiness = calculateResponseReadiness(state, cognitiveLoad);
 
@@ -167,6 +274,15 @@ export function recalculateRating(state: GameState, awardDailyPoints = false): v
   securityHealth = Math.min(securityHealth, security + 24);
   if (troopers.length === 0 || operators.length === 0) securityHealth = Math.min(securityHealth, 39);
   if (detectionFusion < 20) securityHealth = Math.min(securityHealth, 49);
+  securityHealth = clamp(securityHealth);
+  const schedule = scheduleAdherence(state);
+  const overallMetrics = overallMetricsFor(state, securityHealth, costEffectiveness, schedule);
+  const overallScore = clamp(
+    overallMetrics.performance * 0.35
+      + overallMetrics.risk * 0.25
+      + overallMetrics.cost * 0.25
+      + overallMetrics.schedule * 0.15,
+  );
 
   state.rating.coverage = Math.round(coverage);
   state.rating.uptime = Math.round(uptime);
@@ -174,23 +290,26 @@ export function recalculateRating(state: GameState, awardDailyPoints = false): v
   state.rating.peopleWellbeing = Math.round(people);
   state.rating.costEffectiveness = Math.round(costEffectiveness);
   state.rating.readiness = Math.round(readiness);
-  state.rating.scheduleConfidence = Math.round(scheduleConfidence);
+  state.rating.scheduleConfidence = Math.round(schedule);
   state.rating.trooperHappiness = Math.round(trooperHappiness);
   state.rating.operatorHappiness = Math.round(operatorHappiness);
   state.rating.cognitiveLoad = Math.round(cognitiveLoad);
   state.rating.detectionFusion = Math.round(detectionFusion);
   state.rating.responseReadiness = Math.round(responseReadiness);
-  state.rating.securityHealth = Math.round(clamp(securityHealth));
-  state.rating.campRating = state.rating.securityHealth;
+  state.rating.securityHealth = Math.round(securityHealth);
+  state.rating.overallMetrics = overallMetrics;
+  state.rating.overallScore = Math.round(overallScore);
+  // Scenario plumbing still asks for `rating`, now intentionally mapped to Overall Score.
+  state.rating.campRating = state.rating.overallScore;
   if (awardDailyPoints) state.rating.capabilityPoints += Math.round((securityHealth * securityHealth) / 100);
-  state.rating.capabilityLevel = capabilityLevel(state.rating.capabilityPoints, state.rating.campRating);
+  state.rating.capabilityLevel = capabilityLevel(state.rating.capabilityPoints, state.rating.overallScore);
 }
 
-function capabilityLevel(points: number, rating: number): string {
-  if (points >= 15_000 && rating >= 90) return "Exemplary";
-  if (points >= 8_000 && rating >= 80) return "Resilient";
-  if (points >= 3_500 && rating >= 65) return "Assured";
-  if (points >= 1_200 && rating >= 45) return "Integrated";
-  if (rating >= 25) return "Basic";
+function capabilityLevel(points: number, overallScore: number): string {
+  if (points >= 15_000 && overallScore >= 90) return "Exemplary";
+  if (points >= 8_000 && overallScore >= 80) return "Resilient";
+  if (points >= 3_500 && overallScore >= 65) return "Assured";
+  if (points >= 1_200 && overallScore >= 45) return "Integrated";
+  if (overallScore >= 25) return "Basic";
   return "Fragile";
 }

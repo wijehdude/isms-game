@@ -21,15 +21,15 @@ The current repository is a polished, playable **vertical slice** of that design
 
 ---
 
-## Sentinel Base v2 operating model
+## Sentinel Base v3 operating model
 
-The current release is named **Sentinel Base**. It starts every scenario with a credible inherited posture: $20,000,000 in command funds, eight operational fixed cameras carrying Intrusion VA, twelve perimeter floodlights, a trooper and operator on each shift, and one engineer. Players expand this baseline rather than constructing security from nothing.
+The current release is named **Sentinel Base**. It starts every scenario with a credible inherited posture: $10,000,000 in command funds, eight operational fixed cameras carrying Intrusion VA, twelve perimeter floodlights, a trooper and operator on each shift, and one engineer. Players expand this baseline rather than constructing security from nothing.
 
-The game is deliberately not an approval simulator. Capability Builder supports procurement batches of 1-99 identical assets and prices both unit and batch lifecycle cost before commitment. Delivery Autopilot advances ready ICD integration, factory acceptance, and site acceptance when personnel and funds are available; **Approve all ready** is retained as a single catch-up command. Deployment location, camera orientation, configuration, and force mix remain player decisions.
+The game is deliberately not an approval simulator. Capability Builder supports procurement batches of 1-99 identical assets, a two-vendor marketplace for every equipment class, access-control products, and Mario Kart-style desirability bars for products and options. Delivery Autopilot advances ready ICD integration, factory acceptance, and site acceptance when personnel and funds are available; **Approve all ready** is retained as a single catch-up command. Existing assets can receive paid upgrades or paid repositioning change orders rather than being discarded.
 
-C2 is autonomous. Operators verify alarms and dispatch available troopers, robots, or drones, while the player changes outcomes indirectly by improving evidence quality, reducing false alarms, adding coverage, sustaining people, and fielding mobile capability. The C2 view is therefore an operational record, not a button-click queue.
+C2 is autonomous. Operators verify alarms and dispatch available troopers, robots, or drones, while the player changes outcomes indirectly by improving evidence quality, reducing false alarms, adding coverage, sustaining people, and fielding mobile capability. Drones automatically occupy one of eight central pad berths and use a player-selected fenceline side plus Day, Night, or Both routine patrol. The C2 view is therefore an operational record, not a button-click queue.
 
-Security Health is the visible command rating. It is driven by operational security, response readiness, troop and operator happiness, lifecycle cost effectiveness and savings, asset uptime, fused evidence, and a cognitive-workload penalty. Capability points build over time from proven performance. Every seven in-game days command injects at least $2m, with uncapped upside based on Security Health and capability points. At the hardened-perimeter thresholds (85 Health, 8,000 points, 70% coverage, 85% fusion, 85% response readiness, and 90% uptime), intruders are deterministically detected and intercepted.
+Overall Score is the visible command rating. It weights Performance 35%, Risk 25%, Cost 25%, and Schedule 15%, using detection rate, false alarms, MTTD, MTTR, closure success, early prevention, perimeter security, missed intrusions, lifecycle cost effectiveness, cash runway, and planned-versus-actual delivery. Security Health remains an internal security/funding measure. Capability points build over time from proven performance. Every seven in-game days command injects at least $2m, with uncapped upside based on Security Health and capability points. At the hardened-perimeter thresholds (85 Health, 8,000 points, 70% coverage, 85% fusion, 85% response readiness, and 90% uptime), intruders are deterministically detected and intercepted.
 
 First launch offers a five-step walkthrough that can be skipped, suppressed, or replayed from Save & Settings. Camera zoom ranges from 0.20x to 2.25x with pointer-centred wheel zoom and a Fit Perimeter command. The renderer culls off-screen tiles and entities, uses a low-zoom terrain cache, and caps canvas resolution scaling to preserve smooth play.
 
@@ -80,15 +80,15 @@ Scenarios provide fixed seeds, budgets, weather distributions, threat pressure, 
 
 | Scenario | Difficulty | Start cash | Deadline | Command objective |
 | --- | --- | ---: | ---: | --- |
-| First Watch | Training | $20,000,000 | Day 30 | Rating 60, coverage 42%, trooper happiness 58, operator happiness 58 |
-| Monsoon Line | Standard | $20,000,000 | Day 45 | Rating 68, catch 6 intruders, retain $250,000 |
-| Noise Floor | Hard | $20,000,000 | Day 60 | Rating 72, operator happiness 68, catch 10 intruders |
+| First Watch | Training | $10,000,000 | Day 30 | Overall Score 60, coverage 42%, trooper happiness 58, operator happiness 58 |
+| Monsoon Line | Standard | $10,000,000 | Day 45 | Overall Score 68, catch 6 intruders, retain $250,000 |
+| Noise Floor | Hard | $10,000,000 | Day 60 | Overall Score 72, operator happiness 68, catch 10 intruders |
 
 All scenarios begin at 06:00 with a basic three-shift team, one engineer, eight operational Intrusion VA cameras, and twelve operational floodlights. Noise Floor begins with reduced operator happiness.
 
 ### 2.2 Sandbox — Current
 
-Open Command starts with $20,000,000, has no deadline, and never declares a final victory. Threat pressure rises gradually by month. Weekly command funding reacts to delivered capability, while lifetime points and capability tiers provide the long-term score chase.
+Open Command starts with $10,000,000, has no deadline, and never declares a final victory. Threat pressure rises gradually by month. Weekly command funding reacts to delivered capability, while lifetime points and capability tiers provide the long-term score chase.
 
 ### 2.3 Scenario framework — Roadmap
 
@@ -118,7 +118,7 @@ The playable map is a deterministic 100x100 isometric tile grid. Each packed til
 
 The initial owned camp spans tiles 18-81 on both axes. It contains a perimeter fence and main gate, Headquarters, C2 Operations Centre, barracks, supply store, gym, guardhouse, parade square, roads, walkways, a 400 metre track, and a central drone pad. These structures create placement constraints and visual context; they are not individually managed in the vertical slice.
 
-Assets can be placed only on owned, unblocked tiles. Flat-mounted devices reject elevated tiles, and drones must be installed on the drone pad. Placement uses a green or red ghost, a coverage preview, and a human-readable failure reason.
+Assets can be placed only on owned, unblocked tiles. Flat-mounted devices reject elevated tiles. Drones auto-base into one of eight slots at the central drone pad after factory acceptance; players configure fenceline side and Day, Night, or Both patrols. Placement and relocation use a green or red ghost, a coverage preview, and a human-readable failure reason.
 
 ### 3.2 Projection and draw order — Current
 
@@ -173,7 +173,7 @@ Robots are deployed assets that can respond when no trooper is available. They f
 
 ### 4.4 Drones
 
-The Hawkeye Patrol Drone is a rapid, wide-area mobile responder. It must be based on the central drone pad. Night vision, sprint, battery, wide-scan, and thermal payloads tailor its coverage. Storms nearly ground drone detection, so it must not be the camp's only layer.
+The Hawkeye and Vector patrol drones are rapid, wide-area mobile responders. They automatically base at the central drone pad, then loop a player-selected North, East, South, or West fenceline during a Day, Night, or Both patrol window. Night vision, sprint, battery, wide-scan, and thermal payloads tailor coverage. Storms nearly ground drone detection, so drones must not be the camp's only layer.
 
 An idle drone performs a deterministic four-tile patrol orbit around its pad. On dispatch it flies directly to the incident at a speed derived from configured response power, then resumes its home patrol. Battery cycles, player-authored flight paths, richer live retasking, and weather-driven return-to-base behavior remain roadmap features.
 
@@ -334,7 +334,7 @@ Happiness moves 12% of the way toward a role-specific target at each daily updat
 
 Troopers value broad coverage and operational robot/drone support; unresolved incidents and fatigue reduce their target. Operators value automatic analytics; manual cameras, unresolved alarms, nuisance-alarm ratio, and fatigue reduce theirs. Engineers are affected by project backlog and fatigue.
 
-Trooper happiness affects human response success. Trooper and operator averages combine into workforce wellbeing, which contributes 20% of the camp rating. This gives good design a human payoff: useful automation and layered coverage make work safer and more manageable, while indiscriminate alarm generation erodes trust.
+Trooper happiness affects human response success. Trooper and operator averages combine into workforce wellbeing, which contributes to Security Health and therefore the risk/performance evidence behind Overall Score. This gives good design a human payoff: useful automation and layered coverage make work safer and more manageable, while indiscriminate alarm generation erodes trust.
 
 ### 8.3 Workforce expansion — Roadmap
 
@@ -469,7 +469,7 @@ The lower eligible level is used if either its points or rating gate is not met.
 
 ### 11.2 Main HUD — Current
 
-- **Top bar:** camp name, date/time, weather/temperature, cash, active alarm count, camp rating, simulation speed, settings.
+- **Top bar:** camp name, date/time, weather/temperature, cash, active alarm count, Overall Score, simulation speed, settings.
 - **Left command dock:** scenario objectives and the first-capability tutorial checklist.
 - **Message ticker:** most recent operational, financial, weather, or project notification.
 - **Bottom toolbar:** Capability, Delivery, C2 Alarms, People, Finance, Rating, coverage overlay, and decommission.

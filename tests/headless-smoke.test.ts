@@ -64,13 +64,18 @@ function buildScriptedCamp(): GameState {
   expect(state.orders.every((order) => order.stage === "ready")).toBe(true);
 
   const deviceIds: string[] = [];
-  for (let index = 0; index < SCRIPTED_CAPABILITY.length; index += 1) {
-    const asset = SCRIPTED_CAPABILITY[index];
-    const order = state.orders[0];
+  for (const asset of SCRIPTED_CAPABILITY) {
     expect(asset).toBeDefined();
+    if (asset.modelId === "drone-overwatch") {
+      const drone = state.devices.find((device) => device.modelId === asset.modelId && device.upgradeIds.every((upgrade) => asset.upgradeIds.includes(upgrade)));
+      expect(drone).toBeDefined();
+      if (drone) deviceIds.push(drone.id);
+      continue;
+    }
+    const order = state.orders.find((candidate) => candidate.modelId === asset.modelId && candidate.upgradeIds.length === asset.upgradeIds.length
+      && candidate.upgradeIds.every((upgrade) => asset.upgradeIds.includes(upgrade)));
     expect(order).toBeDefined();
-    if (!asset || !order) continue;
-    expect(order.modelId).toBe(asset.modelId);
+    if (!order) continue;
     const previousLength = state.devices.length;
     expect(placeOrder(state, order.id, asset.x, asset.y).ok).toBe(true);
     const device = state.devices[previousLength];
@@ -78,7 +83,10 @@ function buildScriptedCamp(): GameState {
     if (device) deviceIds.push(device.id);
   }
   expect(state.orders).toEqual([]);
-  for (const deviceId of deviceIds) expect(commissionDevice(state, deviceId).ok).toBe(true);
+  for (const deviceId of deviceIds) {
+    const device = state.devices.find((candidate) => candidate.id === deviceId);
+    if (device?.status === "awaiting-sat") expect(commissionDevice(state, deviceId).ok).toBe(true);
+  }
   advanceToLatestReadyAt(
     state,
     state.devices.filter((device) => deviceIds.includes(device.id)).map((device) => device.readyAt),

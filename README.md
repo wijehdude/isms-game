@@ -1,6 +1,6 @@
 # Sentinel Base
 
-Sentinel Base is a single-player, isometric security-capability management game for the browser. Configure cameras, LiDAR, robots, drones, and lighting; deliver an assured C2 capability; support three shifts; then watch the autonomous team deal with intrusions, weather, and false alarms.
+Sentinel Base is a single-player, isometric security-capability management game for the browser. Compare vendor products, configure cameras, LiDAR, robots, drones, lighting, and access control; then watch the autonomous C2 team deal with intrusions, weather, and false alarms.
 
 This repository contains a playable vertical slice built from scratch with strict TypeScript, Canvas 2D, HTML/CSS, and Vite. It uses no game engine and has no runtime package dependencies. Gameplay sprites and world art are generated in code at runtime.
 
@@ -26,17 +26,18 @@ The static bundle is written to `dist/`. `vite.config.ts` uses a relative asset 
 
 ## Play
 
-Choose one of three objective scenarios from **New Operation**, or start the endless **Open Command** Sandbox. Every mode starts with a $20,000,000 command appropriation, eight operational intrusion-analytics cameras, twelve perimeter floodlights, and a basic three-shift workforce.
+Choose one of three objective scenarios from **New Operation**, or start the endless **Open Command** Sandbox. Every mode starts with a $10,000,000 command appropriation, eight operational intrusion-analytics cameras, twelve perimeter floodlights, and a basic three-shift workforce.
 
 The first-capability loop is:
 
-1. Open **Capability**, select a model and compatible options, and choose a quantity from 1 to 99.
-2. Review the per-unit and whole-batch programme cost before placing the purchase order.
+1. Open **Capability**, compare vendor products, select configuration cards, and choose a quantity from 1 to 99.
+2. Review the six desirability bars and the live, urgency-aware per-unit and whole-batch programme cost before placing the purchase order.
 3. Delivery Autopilot handles ICD/C2 integration, factory acceptance, and site acceptance when they become ready and funded. **Approve all ready** is available as an immediate catch-up control.
-4. Deploy each tested asset on a valid owned tile using the placement ghost; placement and camera orientation still matter.
-5. Watch the autonomous C2 team validate alarms and dispatch troopers, robots, or drones.
-6. Use the security-health view, workforce happiness, cognitive workload, recurring cost, and coverage to decide the next enhancement.
-7. Receive at least $2,000,000 in fresh command funding every in-game week; stronger security health and capability points increase the injection without a ceiling.
+4. Deploy tested fixed assets on a valid owned tile. Drones automatically base at the central pad; configure each one for a fenceline side and Day, Night, or Both patrols.
+5. Upgrade an operational asset or reposition it through a paid, temporary change outage instead of decommissioning it.
+6. Filter map coverage by capability type and use the map legend to find sensor gaps.
+7. Watch autonomous C2 outcomes and the Overall Score: performance, risk, cost, and schedule all count.
+8. Receive at least $2,000,000 in fresh command funding every in-game week; stronger security health and capability points increase the injection without a ceiling.
 
 The command checklist at the left of the game screen walks through this sequence and the first alarm response.
 
@@ -63,21 +64,21 @@ Click an operational device on the map to inspect its condition, certified confi
 ## What is implemented
 
 - Deterministic 100x100 isometric camp with terrain, ownership, perimeter, roads, facilities, and a drone pad.
-- Seven device models and 18 configuration options across cameras, LiDAR, robots, drones, and floodlights, including fixed camera FOV and a true panoramic upgrade.
-- Batch procurement (1-99 assets), supplier lead time, automated ICD integration, factory acceptance, map deployment, automated site acceptance, operation, faults, repair, and decommissioning.
+- Twelve vendor products across cameras, LiDAR, robots, drones, floodlights, and access control, with standardized 1-10 Cost, Capability, Availability, Scalability, Interoperability, and Lead Time comparison bars.
+- Batch procurement (1-99 assets), supplier lead time, automated ICD integration, factory acceptance, map deployment, automated site acceptance, upgrades, paid relocation, operation, faults, repair, and decommissioning.
 - Scouts, thieves, and saboteurs with probabilistic layered detection, day/night effects, rain, fog, storms, and security losses.
 - Autonomous operator validation, trooper/mobile dispatch, response outcomes, incident history, and C2 notifications.
 - Troopers, operators, and engineers on three shifts with fatigue, happiness, payroll, and hiring.
 - A traceable ledger, recurring O&S, weekly command allocations, cost savings, emergency continuity funding, and refunds.
-- Explainable security-health rating, response readiness, cognitive workload, capability points, and progression from Fragile to Exemplary.
+- Explainable Overall Score across performance, risk, cost, and schedule; incident detection, false alarms, MTTD, MTTR, closures, missed intrusions, perimeter score, prevention, capability points, and progression from Fragile to Exemplary.
 - Three scenarios, endless Sandbox, an optional five-step walkthrough, manual save, monthly autosave, and JSON import/export.
-- Code-generated sprite atlas, 0.20x-2.25x pointer-centred zoom, perimeter fitting, and cull/cached Canvas rendering with HTML/CSS management UI.
+- Code-generated sprite atlas, main-map capability legend, filtered coverage overlays, 0.20x-2.25x pointer-centred zoom, perimeter fitting, and cull/cached Canvas rendering with HTML/CSS management UI.
 
 The detailed product boundary, formulas, roadmap, milestones, and corrected acceptance criteria are in [GAME_DESIGN.md](./GAME_DESIGN.md). Exact current tuning and implementation notes are in [BALANCE.md](./BALANCE.md).
 
 ## Saves
 
-The complete, versioned Sentinel Base v2 game state is serialized as JSON. The earlier Camp Overwatch v1 saves are intentionally retired so every operation starts with the new baseline and simulation rules.
+The complete, versioned Sentinel Base v3 game state is serialized as JSON. Earlier v1 and v2 saves are intentionally retired so every operation starts with the new patrol, vendor, and operational-metrics model.
 
 - **Autosave:** one browser slot, updated at each monthly close and scenario ending.
 - **Manual save:** one browser slot, updated from Save & Settings.
@@ -127,12 +128,12 @@ The Canvas draws terrain, structures, weather, coverage, and entities. HTML/CSS 
 
 Sentinel Base is the game. Theme-park guests, rides, coasters, and coaster physics are not part of this repository.
 
-The current vertical slice abstracts several systems that the design roadmap expands: vendor competition, editable ICD/test evidence, detailed programme risk, power and communications, routed robot/drone patrols, individual training/opinions, construction, land purchase, and scenario-defined larger maps. Multiplayer, 3D, injuries/fatalities, real-money systems, mobile-first UI, mods, localization, and audio are explicit non-goals for this release.
+The current vertical slice abstracts several systems that the design roadmap expands: editable ICD/test evidence, detailed programme risk, power and communications, individual training/opinions, construction, land purchase, and scenario-defined larger maps. Multiplayer, 3D, injuries/fatalities, real-money systems, mobile-first UI, mods, localization, and audio are explicit non-goals for this release.
 
 ## Troubleshooting
 
 - **Blank page after building:** serve `dist/` with `npm run preview` or another static server; do not rely on `file://` module loading.
 - **Continue is disabled:** no browser save exists yet. Start a game and use Save & Settings, or reach the first monthly close.
-- **A device will not deploy:** read the placement ribbon/toast. The tile must be owned and unblocked; flat devices reject raised ground; drones require the central pad.
+- **A device will not deploy:** read the placement ribbon/toast. The tile must be owned and unblocked; flat devices reject raised ground. Drones base themselves at the central pad after factory acceptance.
 - **A camera never raises an alarm:** a Fixed Camera without a VA option needs an on-duty operator for manual detection. Edge-AI or a `VA` module enables automatic analytics.
 - **An incident cannot be dispatched:** validate it first and ensure an unassigned on-duty trooper or an operational robot/drone is available.

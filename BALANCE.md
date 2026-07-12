@@ -4,15 +4,15 @@ This file records the tuning implemented in the current vertical slice. It is de
 
 All money values are game dollars. Percentages shown as “+6 pp” are additive percentage points; multipliers such as “x1.08” are multiplicative.
 
-## Sentinel Base v2 current overrides
+## Sentinel Base v3 current overrides
 
-This section supersedes older v1 references below where they differ. It documents the shipped Sentinel Base posture and economy.
+This section supersedes older v1/v2 references below where they differ. It documents the shipped Sentinel Base posture, vendor model, and economy.
 
 ### Starting posture and feasibility
 
-Every scenario and Sandbox starts with a $20,000,000 command appropriation, three troopers, three operators, one engineer, eight operational Sentry Fixed Cameras equipped with Intrusion VA, and twelve operational Lumen Security Floodlights. The cameras cover the eight fixed ingress sectors and the lights cover the four perimeter sides.
+Every scenario and Sandbox starts with a $10,000,000 command appropriation, three troopers, three operators, one engineer, eight operational Sentry Fixed Cameras equipped with Intrusion VA, and twelve operational Lumen Security Floodlights. The cameras cover the eight fixed ingress sectors and the lights cover the four perimeter sides.
 
-The baseline costs $160,248 per month to sustain: $145,000 payroll plus $15,248 operational support. A representative full perimeter enhancement remains easily feasible from the opening appropriation: 24 additional Fixed Cameras with Intrusion VA ($1,752,000 whole-programme), 32 Floodlights ($720,000), and four standard LiDARs ($616,000), for a $3,088,000 delivered-capability commitment before optional upgrades. This leaves more than $16.9m before recurring spend.
+The baseline costs $160,248 per month to sustain: $145,000 payroll plus $15,248 operational support. A representative full perimeter enhancement remains feasible from the opening appropriation: 24 additional Fixed Cameras with Intrusion VA ($1,752,000 whole-programme), 32 Floodlights ($720,000), and four standard LiDARs ($616,000), for a $3,088,000 delivered-capability commitment before optional upgrades. This leaves more than $6.9m before recurring spend.
 
 ### Weekly command funding
 
@@ -28,11 +28,13 @@ weekly funding = max($2,000,000,
 
 There is no monthly allocation in Sentinel Base. Monthly close continues to post payroll, device O&S, savings, and autosave.
 
-### Automation, C2, and score
+### Automation, C2, score, and vendor pricing
 
-Delivery Autopilot progresses ready ICD integration, factory acceptance, and site acceptance gates when staff and funding permit. The player only chooses deployment locations. C2 validates alarms and dispatches available troopers, robots, or drones automatically. The player changes future outcomes through coverage, fused evidence, staffing, workload, and mobile capability.
+Delivery Autopilot progresses ready ICD integration, factory acceptance, and site acceptance gates when staff and funding permit. Existing assets accept module upgrades through an offline integration/test change order and can be relocated for `max($2,000, 5% of installed acquisition)` plus a migration outage. C2 validates alarms and dispatches available troopers, robots, or drones automatically. Ready drones auto-base at the eight-slot central pad; players select a North, East, South, or West route and Day, Night, or Both patrol window.
 
-Security Health is the displayed base rating. It combines operational security, response readiness, trooper and operator happiness, cost effectiveness, uptime, fused detection, and cognitive load. Capability points are awarded daily and on successful responses. At the hardened-perimeter threshold, fully operational high-quality coverage guarantees detection and successful interception; it provides an explicit end-state rather than an endless dice roll.
+The displayed Overall Score weights Performance 35%, Risk 25%, Cost 25%, and Schedule 15%. Its operational metrics include Incident Detection Rate, False Alarm Rate, MTTD, MTTR, Successful Incident Closures, Missed Intrusions, Perimeter Security Score, and Threats Prevented. Security Health remains the funding/hardened-perimeter measure. Capability points are awarded daily and on successful responses. At the hardened-perimeter threshold, fully operational high-quality coverage guarantees detection and successful interception; it provides an explicit end-state rather than an endless dice roll.
+
+Each vendor product and configuration option publishes a 1-10 desirability card for Cost, Capability, Availability, Scalability, Interoperability, and Lead Time. Cost and Lead Time are reverse-scored. Quoted equipment cost is `base cost × capability factor × availability factor × scalability factor × interoperability factor × deadline urgency factor × vendor markup`; timed scenarios apply 1.00-1.25 urgency based on deadline pressure and unmet objectives, while Sandbox remains 1.00.
 
 ## 1. Clock, calendar, and simulation
 
@@ -55,10 +57,10 @@ The UI frame delta is capped at 0.25 seconds before entering the fixed-step accu
 
 | Scenario | Cash | Deadline | Threat multiplier | False-alarm multiplier | Seed |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| First Watch | $20,000,000 | Day 30 | 0.72 | 0.80 | 19,881 |
-| Monsoon Line | $20,000,000 | Day 45 | 1.00 | 1.15 | 92,247 |
-| Noise Floor | $20,000,000 | Day 60 | 1.35 | 1.80 | 410,731 |
-| Open Command (Sandbox) | $20,000,000 | None | 0.90 | 1.00 | 73,221 |
+| First Watch | $10,000,000 | Day 30 | 0.72 | 0.80 | 19,881 |
+| Monsoon Line | $10,000,000 | Day 45 | 1.00 | 1.15 | 92,247 |
+| Noise Floor | $10,000,000 | Day 60 | 1.35 | 1.80 | 410,731 |
+| Open Command (Sandbox) | $10,000,000 | None | 0.90 | 1.00 | 73,221 |
 
 ### Objectives
 
@@ -184,7 +186,7 @@ Decommissioning refund:
 round(acquisition including options * 0.20 * current health)
 ```
 
-Orders cannot currently be cancelled or refunded. A drone deployment additionally requires a tile inside the 7x7 pad at x 66-72, y 37-43.
+Orders cannot currently be cancelled or refunded. Ready drones auto-base into one of eight central pad berths at x 66-72, y 37-43, then receive automated SAT; the player configures their fenceline side and patrol window instead of selecting a map tile.
 
 ## 6. Staff economy and shifts
 
@@ -454,7 +456,7 @@ readiness = (asset readiness * 0.65 + staff readiness * 0.35) * 100
 schedule confidence = clamp(55 + readiness * 0.30 - open orders * 1.5)
 ```
 
-Schedule confidence becomes 100 after a scenario is no longer active. It is diagnostic and has no direct weight in the current camp rating.
+Schedule adherence compares planned operational dates with actual commissioning and gives the Overall Score its 15% schedule component.
 
 ### Security Health
 

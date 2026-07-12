@@ -77,7 +77,7 @@ export function createGame(scenarioId: string, seedOverride?: number): GameState
   const scenario = getScenario(scenarioId);
   const seed = seedOverride ?? scenario.seed;
   const state: GameState = {
-    version: 2,
+    version: 3,
     idCounter: 0,
     seed,
     rngState: hashSeed(seed),
@@ -102,17 +102,30 @@ export function createGame(scenarioId: string, seedOverride?: number): GameState
     incidents: [],
     economy: { cash: 0, lifetimeFunding: 0, lifetimeSpend: 0, avoidedLosses: 0, stolenLosses: 0, realisedSavings: 0, ledger: [] },
     rating: {
+      overallScore: 0,
+      overallMetrics: {
+        performance: 50, risk: 50, cost: 50, schedule: 65,
+        incidentDetectionRate: 50, falseAlarmRate: 0, meanTimeToDetect: 0, meanTimeToRespond: 0,
+        successfulIncidentClosures: 50, missedIntrusions: 0, perimeterSecurityScore: 0,
+        threatsPrevented: 0, cashRunway: 50, scheduleAdherence: 65,
+      },
       campRating: 0, securityEffectiveness: 0, peopleWellbeing: 0, costEffectiveness: 0, readiness: 0,
       scheduleConfidence: 0, coverage: 0, uptime: 0, trooperHappiness: 0, operatorHappiness: 0,
       capabilityPoints: 0, capabilityLevel: "Fragile", caught: 0, escaped: 0, alarmsResolved: 0, falseAlarms: 0,
       securityHealth: 0, cognitiveLoad: 0, detectionFusion: 0, responseReadiness: 0,
+    },
+    metrics: {
+      realIncidents: 0, detectedRealIncidents: 0, falseAlarmEvents: 0,
+      detectionSamples: 0, totalDetectionMinutes: 0,
+      responseSamples: 0, totalResponseMinutes: 0,
+      successfulClosures: 0, missedIntrusions: 0, threatsPrevented: 0,
     },
     automation: { lifecycleAutopilot: true, incidentResponse: true },
     tutorial: { procured: false, integrated: false, tested: false, deployed: false, commissioned: false, hired: false, resolvedAlarm: false, dismissed: false },
     messages: [],
   };
 
-  postLedger(state, "funding", "Initial command appropriation", 20_000_000);
+  postLedger(state, "funding", "Initial command appropriation", scenario.startCash);
   for (let shift = 0; shift < 3; shift += 1) {
     state.staff.push(createStaff(state, "trooper", shift as 0 | 1 | 2));
     state.staff.push(createStaff(state, "operator", shift as 0 | 1 | 2));
